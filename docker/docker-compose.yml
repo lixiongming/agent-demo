@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  # API服务
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=123456
+      - MYSQL_DATABASE=agent_db
+      - REDIS_HOST=redis
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+    depends_on:
+      - mysql
+      - redis
+    volumes:
+      - ../logs:/app/logs
+      - ../models:/app/models
+
+  # MySQL
+  mysql:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=123456
+      - MYSQL_DATABASE=agent_db
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ../scripts/init_vector_db.sql:/docker-entrypoint-initdb.d/init.sql
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  mysql_data:
+  redis_data:
