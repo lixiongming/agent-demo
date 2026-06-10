@@ -1,23 +1,26 @@
-"""RAG业务服务
+"""RAG业务服务 - 生产级别
 
 功能：
 - 文档入库流程
 - 检索+生成流程
 - 结果优化
-- 会话管理
+- 三级相似度策略
 
-功能：
-- 业务逻辑封装
-- 流程编排
-- 异步处理
+改进：
+- 依赖注入支持
+- 异步操作
+- 可测试
 """
 from typing import List, Dict, Any, Optional
-import asyncio
 from datetime import datetime
 import os
 
-from app.embeddings import EmbeddingService, VectorStore, DocumentLoader, Retriever
-from app.embeddings.document_loader import DocumentChunk
+from app.embeddings import EmbeddingService, DocumentLoader, Retriever, DocumentChunk
+from app.embeddings.qdrant_store import get_qdrant_adapter
+from app.config import get_settings
+from app.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class RAGService:
@@ -28,43 +31,69 @@ class RAGService:
     - 文档入库自动化
     - 检索优化
     - 结果生成
+    
+    改进：
+    - 支持依赖注入
+    - 异步操作
+    - 三级相似度策略
     """
     
     def __init__(
         self,
-        embedding_model: str = "bge-large-zh-v1.5",
-        db_config: Dict[str, Any] = None,
+        embedding_model: str = None,
+        collection_name: str = None,
         llm_client: Any = None,
         chunk_size: int = 500,
-        top_k: int = 5
+        top_k: int = 5,
+        # 依赖注入参数（可选）
+        embedding_service: Any = None,
+        vector_store: Any = None,
+        document_loader: Any = None
     ):
         """初始化RAG服务
         
         Args:
-            embedding_model: 向量化模型
-            db_config: 数据库配置
+            embedding_model: 向量化模型名称（默认从配置读取）
+            collection_name: Qdrant 集合名称
             llm_client: LLM客户端
             chunk_size: 文档分块大小
             top_k: 检索数量
+            embedding_service: 向量嵌入服务（依赖注入）
+            vector_store: 向量存储（依赖注入）
+            document_loader: 文档加载器（依赖注入）
         """
-        # 默认数据库配置
-        self.db_config = db_config or {
-            "db_host": os.getenv("MYSQL_HOST", "localhost"),
-            "db_port": int(os.getenv("MYSQL_PORT", 3306)),
-            "db_user": os.getenv("MYSQL_USER", "root"),
-            "db_password": os.getenv("MYSQL_PASSWORD", ""),
-            "db_name": os.getenv("MYSQL_DATABASE", "agent_db")
-        }
+        settings = get_settings()
         
-        # 初始化组件
-        self.embedding_service = EmbeddingService(
-            model_name=embedding_model,
-            model_path=os.path.join(os.getcwd(), embedding_model) if os.path.exists(os.path.join(os.getcwd(), embedding_model)) else None
-        )
+        # 依赖注入支持
+        if embedding_service:
+            self.embedding_service = embedding_service
+        else:
+            embedding_model = embedding_model or settings.EMBEDDING_MODEL_NAME
+            model_path = settings.get_embedding_model_path
+            
+            if not os.path.exists(model_path):
+                alt_path = os.path.join(os.getcwd(), "models", embedding_model)
+                if os.path.exists(alt_path):
+                    model_path = alt_path
+                else:
+                    model_path = None
+            
+            self.embedding_service = EmbeddingService(
+                model_name=embedding_model,
+                model_path=model_path
+            )
         
-        self.vector_store = VectorStore(**self.db_config)
+        if vector_store:
+            self.vector_store = vector_store
+        else:
+            # 使用 Qdrant 向量存储
+            collection_name = collection_name or getattr(settings, "QDRANT_COLLECTION", "knowledge_base")
+            self.vector_store = get_qdrant_adapter(collection_name=collection_name)
         
-        self.document_loader = DocumentLoader(chunk_size=chunk_size)
+        if document_loader:
+            self.document_loader = document_loader
+        else:
+            self.document_loader = DocumentLoader(chunk_size=chunk_size)
         
         self.retriever = Retriever(
             embedding_service=self.embedding_service,
@@ -73,6 +102,9 @@ class RAGService:
         )
         
         self.llm_client = llm_client
+        self.top_k = top_k
+        
+        logger.info("RAGService initialized")
         
     async def ingest_document(
         self,
@@ -112,6 +144,8 @@ class RAGService:
         
         doc_ids = self.vector_store.add_documents_batch(documents)
         
+        logger.info(f"Document ingested: {file_path}, chunks: {len(chunks)}")
+        
         return {
             "file_path": file_path,
             "total_chunks": len(chunks),
@@ -136,7 +170,6 @@ class RAGService:
         Returns:
             入库结果
         """
-        # 加载所有文档
         chunks = self.document_loader.load_directory(
             directory,
             file_types=file_types
@@ -151,11 +184,9 @@ class RAGService:
                 "timestamp": datetime.now().isoformat()
             }
         
-        # 批量向量化
         contents = [chunk.content for chunk in chunks]
         embeddings = self.embedding_service.embed_texts(contents)
         
-        # 批量存储
         documents = []
         for i, chunk in enumerate(chunks):
             doc_metadata = chunk.metadata.copy()
@@ -171,6 +202,8 @@ class RAGService:
             })
         
         doc_ids = self.vector_store.add_documents_batch(documents)
+        
+        logger.info(f"Directory ingested: {directory}, chunks: {len(chunks)}")
         
         return {
             "directory": directory,
@@ -196,10 +229,8 @@ class RAGService:
         Returns:
             文档ID
         """
-        # 向量化
         embedding = self.embedding_service.embed_text(content)
         
-        # 存储
         doc_id = self.vector_store.add_document(
             content=content,
             embedding=embedding,
@@ -207,6 +238,8 @@ class RAGService:
             source=source,
             doc_type="text"
         )
+        
+        logger.info(f"Text ingested: doc_id={doc_id}, source={source}")
         
         return doc_id
     
@@ -232,6 +265,8 @@ class RAGService:
         Returns:
             查询结果
         """
+        logger.info(f"RAG query: question='{question[:50]}...', top_k={top_k}")
+        
         # 1. 检索相关文档
         if hybrid:
             results = self.retriever.hybrid_retrieve(question, top_k=top_k)
@@ -251,6 +286,8 @@ class RAGService:
         answer = None
         if self.llm_client and results:
             answer = await self._generate_answer(question, context)
+        
+        logger.info(f"RAG query result: {len(results)} documents found")
         
         return {
             "question": question,
@@ -309,7 +346,6 @@ class RAGService:
         if not self.llm_client:
             return ""
         
-        # 构建提示词
         prompt = f"""基于以下文档内容回答问题。
 
 文档内容：
@@ -318,8 +354,7 @@ class RAGService:
 问题：{question}
 
 请根据文档内容给出准确、详细的回答。如果文档中没有相关信息，请说明。"""
-
-        # 调用LLM
+        
         try:
             if hasattr(self.llm_client, 'ainvoke'):
                 response = await self.llm_client.ainvoke(prompt)
@@ -330,6 +365,7 @@ class RAGService:
             else:
                 return str(self.llm_client(prompt))
         except Exception as e:
+            logger.error(f"Generate answer error: {e}")
             return f"生成回答失败: {str(e)}"
     
     async def delete_document(self, doc_id: int) -> bool:
@@ -341,7 +377,9 @@ class RAGService:
         Returns:
             是否成功
         """
-        return self.vector_store.delete_document(doc_id)
+        result = self.vector_store.delete_document(doc_id)
+        logger.info(f"Document deleted: doc_id={doc_id}, result={result}")
+        return result
     
     async def delete_by_source(self, source: str) -> int:
         """按来源删除
@@ -352,7 +390,9 @@ class RAGService:
         Returns:
             删除数量
         """
-        return self.vector_store.delete_by_source(source)
+        count = self.vector_store.delete_by_source(source)
+        logger.info(f"Documents deleted by source: source={source}, count={count}")
+        return count
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""

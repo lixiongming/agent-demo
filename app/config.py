@@ -61,6 +61,21 @@ class Settings(BaseSettings):
     MAX_ITERATIONS: int = 10
     AGENT_TIMEOUT: int = 60
     
+    # Embedding模型配置
+    EMBEDDING_MODEL_NAME: str = "bge-large-zh-v1.5"
+    EMBEDDING_MODEL_PATH: str = "models"  # 模型存放目录
+
+    @property
+    def get_embedding_model_path(self) -> str:
+        """获取完整的模型路径"""
+        return os.path.join(os.getcwd(), self.EMBEDDING_MODEL_PATH, self.EMBEDDING_MODEL_NAME)
+
+    # Qdrant 向量数据库配置
+    QDRANT_HOST: str = "localhost"
+    QDRANT_PORT: int = 6333
+    QDRANT_API_KEY: Optional[str] = None
+    QDRANT_COLLECTION: str = "knowledge_base"
+    
     # 记忆配置
     MEMORY_SHORT_TERM_TTL: int = 3600  # 1小时
     MEMORY_LONG_TERM_LIMIT: int = 1000

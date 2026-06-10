@@ -1,29 +1,61 @@
-version: '3.8'
-
 services:
-  # API服务
+  # API 服务
   api:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    env_file:
+      - ../.env  # 使用项目根目录的 .env 文件
     ports:
       - "8000:8000"
     environment:
+      # MySQL 配置（连接 Docker 内部 MySQL）
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=root
       - MYSQL_PASSWORD=123456
       - MYSQL_DATABASE=agent_db
+      # Redis 配置
       - REDIS_HOST=redis
-      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - REDIS_PORT=6379
+      # Qdrant 配置
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - QDRANT_COLLECTION=knowledge_base
+      # Embedding 配置
+      - EMBEDDING_MODEL_NAME=bge-large-zh-v1.5
     depends_on:
-      - mysql
-      - redis
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
     volumes:
       - ../logs:/app/logs
-      - ../models:/app/models
+      - ../models:/app/models:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
-  # MySQL
+  # Qdrant 向量数据库
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # MySQL（使用 3306 端口避免与本地 MySQL 冲突）
   mysql:
     image: mysql:8.0
     environment:
@@ -33,7 +65,13 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ../scripts/init_vector_db.sql:/docker-entrypoint-initdb.d/init.sql
+      # 不再挂载 SQL 文件，让 init_db() 自动创建表结构（与本地一致）
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p123456"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   # Redis
   redis:
@@ -42,7 +80,14 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   mysql_data:
   redis_data:
+  qdrant_data:

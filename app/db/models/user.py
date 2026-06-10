@@ -1,6 +1,6 @@
 """用户表模型"""
 from sqlalchemy import Column, Integer, String, DateTime, Boolean
-from app.db.postgres import Base
+from app.db.database import Base
 from datetime import datetime
 
 

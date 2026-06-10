@@ -8,7 +8,7 @@ import json
 from app.api.deps import get_db, get_session_repo, get_message_repo, get_optional_user
 from app.schemas.chat import ChatRequest, ChatResponse, StreamChatRequest
 from app.schemas.common import SuccessResponse
-from app.services.chat_service import ChatService
+from app.services.chat import ChatService
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)

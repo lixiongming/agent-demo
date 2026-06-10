@@ -1,6 +1,6 @@
 """仓库模块"""
-from .session_repo import SessionRepository
-from .message_repo import MessageRepository
-from .user_repo import UserRepository
+from .session import SessionRepository
+from .message import MessageRepository
+from .user import UserRepository
 
 __all__ = ["SessionRepository", "MessageRepository", "UserRepository"]

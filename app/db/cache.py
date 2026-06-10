@@ -1,4 +1,9 @@
-"""Redis 连接"""
+"""缓存管理
+
+支持：
+- Redis 缓存
+- 内存缓存（备用）
+"""
 import redis.asyncio as redis
 from typing import Optional
 from app.config import get_settings
@@ -40,7 +45,7 @@ async def init_redis():
         logger.info("Redis connected")
     except Exception as e:
         logger.warning(f"Redis connection failed: {e}. Running without Redis cache.")
-        redis_client = None  # 允许在没有Redis的情况下运行
+        redis_client = None
 
 
 async def close_redis():

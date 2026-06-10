@@ -69,9 +69,9 @@ class LLMFactory:
     def get_available_models(cls) -> list:
         """获取可用模型列表"""
         return [
+            "qwen3-max",
             "qwen3.7-plus",
             "qwen3.7-lite",
-            "qwen-max",
             "qwen-plus",
             "qwen-turbo",
             "gpt-4",

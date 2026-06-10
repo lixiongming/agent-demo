@@ -9,9 +9,9 @@ from .rag import router as rag_router
 api_router = APIRouter()
 
 # 注册子路由
-api_router.include_router(chat_router, prefix="/chat", tags=["chat"])
-api_router.include_router(sessions_router, prefix="/sessions", tags=["sessions"])
-api_router.include_router(health_router, prefix="/health", tags=["health"])
-api_router.include_router(rag_router, prefix="/rag", tags=["rag"])
+api_router.include_router(chat_router, prefix="/chat", tags=["Chat 对话"])
+api_router.include_router(sessions_router, prefix="/sessions", tags=["Sessions 会话"])
+api_router.include_router(health_router, prefix="/health", tags=["Health 健康检查"])
+api_router.include_router(rag_router, prefix="/rag", tags=["RAG 检索增强生成"])
 
 __all__ = ["api_router"]

@@ -1,5 +1,6 @@
 """服务模块"""
-from .chat_service import ChatService
-from .session_service import SessionService
+from .chat import ChatService
+from .rag import RAGService
+from .session import SessionService
 
-__all__ = ["ChatService", "SessionService"]
+__all__ = ["ChatService", "RAGService", "SessionService"]

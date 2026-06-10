@@ -6,7 +6,7 @@ from typing import Optional
 from app.api.deps import get_db, get_session_repo, get_optional_user
 from app.schemas.session import SessionCreate, SessionInfo, SessionList
 from app.schemas.common import SuccessResponse
-from app.services.session_service import SessionService
+from app.services.session import SessionService
 from app.core.exceptions import SessionNotFoundException
 from app.core.logger import get_logger
 

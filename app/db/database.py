@@ -1,9 +1,16 @@
-"""MySQL 数据库连接"""
+"""数据库连接管理
+
+支持：
+- MySQL 异步连接
+- 连接池管理
+- 会话管理
+"""
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from typing import AsyncGenerator
+
 from app.config import get_settings
 from app.core.logger import get_logger
 
@@ -76,10 +83,10 @@ async def init_db():
     """初始化数据库"""
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("MySQL Database initialized")
+    logger.info("Database initialized")
 
 
 async def close_db():
     """关闭数据库连接"""
     await async_engine.dispose()
-    logger.info("MySQL connection closed")
+    logger.info("Database connection closed")

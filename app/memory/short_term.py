@@ -1,7 +1,7 @@
 """短期记忆 - Redis"""
 from typing import List, Optional, Dict, Any
 import json
-from app.db.redis_client import get_redis, RedisCache
+from app.db.cache import get_redis, RedisCache
 from app.config import get_settings
 from app.core.logger import get_logger
 

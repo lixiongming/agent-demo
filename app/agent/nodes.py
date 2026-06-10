@@ -11,6 +11,83 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 
+# RAG 服务（懒加载）
+_rag_service = None
+
+
+def get_rag_service():
+    """获取 RAG 服务"""
+    global _rag_service
+    if _rag_service is None:
+        from app.services.rag import RAGService
+        _rag_service = RAGService()
+    return _rag_service
+
+
+async def rag_retrieve_node(state: AgentState) -> Dict[str, Any]:
+    """RAG 检索节点
+    
+    在 Agent 决策前，先检索知识库获取相关上下文
+    """
+    logger.info("RAG retrieve node executing")
+    
+    # 获取用户问题
+    messages = state.get("messages", [])
+    current_input = state.get("current_input", "")
+    
+    # 找到最后一条用户消息
+    user_query = current_input
+    if not user_query:
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                user_query = msg.content
+                break
+    
+    if not user_query:
+        return state
+    
+    try:
+        # 检索知识库
+        rag_service = get_rag_service()
+        result = await rag_service.query(
+            question=user_query,
+            top_k=5,
+            threshold=0.3
+        )
+        
+        sources = result.get("sources", [])
+        
+        if sources:
+            # 构建知识上下文
+            context_parts = []
+            for i, source in enumerate(sources):
+                context_parts.append(f"[知识{i+1}] {source.get('content', '')}")
+            
+            knowledge_context = "\n".join(context_parts)
+            
+            # 添加系统消息，包含知识库内容
+            system_msg = SystemMessage(
+                content=f"""以下是知识库中检索到的相关内容，请参考这些内容回答用户问题：
+
+{knowledge_context}
+
+请基于以上知识库内容回答用户问题。如果知识库中没有相关信息，请根据你的知识回答。"""
+            )
+            
+            return {
+                "messages": [system_msg],
+                "rag_context": knowledge_context,
+                "rag_sources": sources
+            }
+        else:
+            logger.info("RAG: 知识库中没有找到相关内容")
+            return state
+            
+    except Exception as e:
+        logger.error(f"RAG retrieve error: {e}")
+        return state
+
+
 async def agent_node(state: AgentState) -> Dict[str, Any]:
     """Agent决策节点
     
@@ -120,9 +197,9 @@ async def tool_node(state: AgentState) -> Dict[str, Any]:
 
 
 async def chat_node(state: ChatState) -> Dict[str, Any]:
-    """聊天节点 - 简化版
+    """聊天节点 - 增强版
     
-    直接生成响应，不使用工具
+    自动检索知识库，将检索结果作为上下文
     """
     logger.info("Chat node executing")
     
@@ -135,11 +212,47 @@ async def chat_node(state: ChatState) -> Dict[str, Any]:
     messages.append(HumanMessage(content=current_input))
     
     try:
+        # 先检索知识库
+        rag_result = None
+        try:
+            rag_service = get_rag_service()
+            rag_result = await rag_service.query(
+                question=current_input,
+                top_k=5,
+                threshold=0.3
+            )
+        except Exception as e:
+            logger.warning(f"RAG检索失败（继续执行）: {e}")
+        
+        # 如果有检索结果，添加到消息中
+        if rag_result and rag_result.get("sources"):
+            sources = rag_result.get("sources", [])
+            context_parts = []
+            for i, source in enumerate(sources):
+                context_parts.append(f"[知识{i+1}] {source.get('content', '')}")
+            
+            knowledge_context = "\n".join(context_parts)
+            
+            # 添加系统提示
+            messages.insert(0, SystemMessage(
+                content=f"""以下是知识库中检索到的相关内容，请参考这些内容回答用户问题：
+
+{knowledge_context}
+
+请基于以上知识库内容回答用户问题。如果知识库中没有相关信息，请根据你的知识回答。"""
+            ))
+            
+            logger.info(f"RAG检索成功，找到 {len(sources)} 条相关知识")
+        
+        # 调用LLM生成响应
         response = await llm.ainvoke(messages)
+        
         return {
             "messages": [AIMessage(content=response.content)],
-            "response": response.content
+            "response": response.content,
+            "rag_used": rag_result is not None and rag_result.get("sources")
         }
+    
     except Exception as e:
         logger.error(f"Chat node error: {e}")
         return {

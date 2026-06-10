@@ -140,9 +140,16 @@ class DocumentLoader:
     def _load_markdown(
         self,
         file_path: str,
-        extract_metadata: bool
+        extract_metadata: bool,
+        smart_split: bool = True
     ) -> List[DocumentChunk]:
-        """加载Markdown文件"""
+        """加载Markdown文件
+        
+        Args:
+            file_path: 文件路径
+            extract_metadata: 是否提取元数据
+            smart_split: 是否使用智能分块（按章节分块，过滤元数据）
+        """
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
         
@@ -164,8 +171,11 @@ class DocumentLoader:
             if title_match:
                 metadata["title"] = title_match.group(1)
         
-        # 分块
-        return self._split_text(content, metadata, file_path, "markdown")
+        # 智能分块 vs 普通分块
+        if smart_split:
+            return self._smart_markdown_split(content, metadata, file_path)
+        else:
+            return self._split_text(content, metadata, file_path, "markdown")
     
     def _load_pdf(
         self,
@@ -315,6 +325,155 @@ class DocumentLoader:
                     print(f"加载文件失败: {file}, 错误: {e}")
         
         return chunks
+    
+    def _smart_markdown_split(
+        self,
+        content: str,
+        metadata: Dict[str, Any],
+        source: str
+    ) -> List[DocumentChunk]:
+        """智能 Markdown 分块
+        
+        特点：
+        1. 按标题/章节分块，保持语义完整性
+        2. 过滤元数据（Schema定义、表格结构等）
+        3. 保留实际内容
+        
+        Args:
+            content: Markdown 内容
+            metadata: 元数据
+            source: 来源
+            
+        Returns:
+            分块列表
+        """
+        # 元数据过滤规则（这些内容不应入库）
+        metadata_patterns = [
+            r'^##\s*Schema',           # Schema 定义
+            r'^###\s*1\.\d+',          # 结构定义小节
+            r'^\|.*\|.*\|',            # 纯表格行（无实际内容）
+            r'^```json',               # JSON 代码块（元数据）
+            r'^---$',                  # 分隔线
+            r'^>\s*\*\*',              # 引用块（通常是元数据说明）
+        ]
+        
+        # 按标题分块
+        sections = self._split_by_headers(content)
+        
+        chunks = []
+        for i, section in enumerate(sections):
+            # 过滤元数据内容
+            filtered_content = self._filter_metadata(section['content'], metadata_patterns)
+            
+            # 跳过空内容或过短内容
+            if not filtered_content or len(filtered_content) < self.min_chunk_size:
+                continue
+            
+            # 创建分块
+            chunk_metadata = metadata.copy()
+            chunk_metadata['section_title'] = section['title']
+            chunk_metadata['section_level'] = section['level']
+            chunk_metadata['chunk_index'] = i
+            
+            chunks.append(DocumentChunk(
+                content=filtered_content,
+                metadata=chunk_metadata,
+                source=source,
+                chunk_id=i,
+                doc_type='markdown'
+            ))
+        
+        return chunks
+    
+    def _split_by_headers(self, content: str) -> List[Dict[str, Any]]:
+        """按标题分块
+        
+        Args:
+            content: Markdown 内容
+            
+        Returns:
+            章节列表 [{title, level, content}]
+        """
+        sections = []
+        
+        # 匹配所有标题
+        header_pattern = re.compile(r'^^(#+)\s+(.+)$', re.MULTILINE)
+        
+        # 找到所有标题位置
+        headers = list(header_pattern.finditer(content))
+        
+        if not headers:
+            # 无标题，整体作为一个块
+            return [{'title': '', 'level': 0, 'content': content.strip()}]
+        
+        # 添加文档开头（第一个标题之前的内容）
+        if headers[0].start() > 0:
+            intro_content = content[:headers[0].start()].strip()
+            if intro_content:
+                sections.append({'title': 'Introduction', 'level': 0, 'content': intro_content})
+        
+        # 按标题分割
+        for i, match in enumerate(headers):
+            level = len(match.group(1))
+            title = match.group(2)
+            
+            # 章节内容：从当前标题到下一个标题
+            start = match.end()
+            end = headers[i + 1].start() if i + 1 < len(headers) else len(content)
+            section_content = content[start:end].strip()
+            
+            sections.append({
+                'title': title,
+                'level': level,
+                'content': section_content
+            })
+        
+        return sections
+    
+    def _filter_metadata(self, content: str, patterns: List[str]) -> str:
+        """过滤元数据内容
+        
+        Args:
+            content: 内容
+            patterns: 过滤模式列表
+            
+        Returns:
+            过滤后的内容
+        """
+        lines = content.split('\n')
+        filtered_lines = []
+        
+        skip_block = False
+        block_type = None
+        
+        for line in lines:
+            # 代码块处理
+            if line.startswith('```'):
+                if skip_block:
+                    skip_block = False
+                    block_type = None
+                    continue
+                else:
+                    # 检查是否是元数据代码块
+                    if 'json' in line or 'schema' in line.lower():
+                        skip_block = True
+                        block_type = 'code'
+                        continue
+            
+            if skip_block:
+                continue
+            
+            # 检查是否匹配元数据模式
+            is_metadata = False
+            for pattern in patterns:
+                if re.match(pattern, line):
+                    is_metadata = True
+                    break
+            
+            if not is_metadata:
+                filtered_lines.append(line)
+        
+        return '\n'.join(filtered_lines).strip()
     
     def _split_text(
         self,

@@ -1,41 +1,54 @@
+# ============================================
+# 项目依赖版本配置 (测试通过版本)
+# Python 版本: 3.12.10
+# 测试日期: 2026-06-08
+# ============================================
+
 # 核心依赖
-fastapi>=0.100.0
-uvicorn>=0.23.0
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
-python-dotenv>=1.0.0
+fastapi==0.136.3
+uvicorn==0.48.0
+pydantic==2.13.4
+pydantic-settings==2.14.1
+python-dotenv==1.2.2
+python-multipart==0.0.32
 
 # 数据库
-sqlalchemy>=2.0.0
-aiomysql>=0.2.0
-pymysql>=1.1.0
-redis>=4.5.0
+sqlalchemy==2.0.50
+aiomysql==0.3.2
+pymysql==1.2.0
+cryptography>=42.0.0          # MySQL 8.0 caching_sha2_password 认证所需
+redis==8.0.0
+qdrant-client==1.12.1
 
 # LangChain & LangGraph
-langchain>=0.1.0
-langchain-openai>=0.1.0
-langgraph>=0.1.0
-langchain-core>=0.1.0
+langchain==1.3.4
+langchain-openai==1.2.2
+langgraph==1.2.4
+langchain-core==1.4.1
 
-# 向量嵌入
-numpy>=1.24.0
-sentence-transformers>=2.2.0
-torch>=2.0.0
+# 向量嵌入 (关键版本 - 必须严格匹配)
+numpy==1.26.4                    # 必须小于 2.0，否则 torch 不兼容
+torch==2.2.0+cpu                 # CPU 版本，避免下载 NVIDIA 大文件（约200MB vs 755MB）
+# torchvision 和 torchaudio 不需要，仅用于图像/音频处理
+transformers==4.39.3             # 必须小于 4.40，兼容 torch 2.2.0
+sentence-transformers==2.7.0     # 兼容 transformers 4.39.3
+scikit-learn==1.9.0
+scipy==1.17.1
 
 # 文档处理
-pypdf>=3.0.0
-python-docx>=0.8.11
+pypdf==6.13.0
+python-docx==1.2.0
 
 # 工具
-httpx>=0.25.0
-aiohttp>=3.8.0
+httpx==0.28.1
+aiohttp==3.14.1
 
 # 日志
-loguru>=0.7.0
+loguru==0.7.3
 
 # 测试
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
+pytest==9.0.3
+pytest-asyncio==1.4.0
 
 # 数据库迁移
-alembic>=1.12.0
+alembic==1.18.4

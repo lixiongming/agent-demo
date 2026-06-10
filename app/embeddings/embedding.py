@@ -20,6 +20,10 @@ import os
 from pathlib import Path
 
 
+# 默认模型目录
+DEFAULT_MODEL_DIR = "models"
+
+
 class EmbeddingService:
     """向量嵌入服务
     
@@ -54,14 +58,20 @@ class EmbeddingService:
         
         # 加载模型
         if model_path and Path(model_path).exists():
+            # 使用指定的本地模型路径
             self.model = SentenceTransformer(model_path)
+            print(f"已加载本地模型: {model_path}")
         else:
-            # 尝试加载本地模型
-            local_path = Path.cwd() / model_name
+            # 尝试从默认 models 目录加载
+            local_path = Path.cwd() / DEFAULT_MODEL_DIR / model_name
             if local_path.exists():
                 self.model = SentenceTransformer(str(local_path))
+                print(f"已加载本地模型: {local_path}")
             else:
+                # 从网络下载（首次调用会较慢）
+                print(f"本地模型不存在，正在从网络下载: {model_name}")
                 self.model = SentenceTransformer(model_name)
+                print(f"模型下载完成: {model_name}")
         
         self.embedding_dim = self.model.get_sentence_embedding_dimension()
         

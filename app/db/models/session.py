@@ -1,7 +1,7 @@
 """会话表模型"""
 from sqlalchemy import Column, Integer, String, DateTime, JSON, Text
 from sqlalchemy.orm import relationship
-from app.db.postgres import Base
+from app.db.database import Base
 from datetime import datetime
 
 

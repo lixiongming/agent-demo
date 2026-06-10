@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.db import get_async_session, SessionRepository, MessageRepository, UserRepository
-from app.db.redis_client import get_redis, RedisCache
+from app.db.cache import get_redis, RedisCache
 from app.config import get_settings
 import redis.asyncio as redis
 

@@ -1,7 +1,7 @@
 """消息表模型"""
 from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, JSON
 from sqlalchemy.orm import relationship
-from app.db.postgres import Base
+from app.db.database import Base
 from datetime import datetime
 
 

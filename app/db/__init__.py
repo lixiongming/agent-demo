@@ -1,11 +1,11 @@
 """数据库模块"""
-from .postgres import (
+from .database import (
     Base, async_engine, sync_engine,
     AsyncSessionLocal, SyncSessionLocal,
     get_async_session, get_sync_session,
     init_db, close_db
 )
-from .redis_client import (
+from .cache import (
     get_redis, init_redis, close_redis,
     RedisCache
 )

@@ -43,6 +43,11 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     
+    # 配置依赖注入容器
+    from app.core.container import setup_container
+    setup_container()
+    logger.info("DI Container configured")
+    
     await init_db()
     await init_redis()
     
@@ -53,6 +58,11 @@ async def lifespan(app: FastAPI):
     # 关闭
     await close_db()
     await close_redis()
+    
+    # 清理容器
+    from app.core.container import DIContainer
+    DIContainer.clear()
+    
     logger.info("Application shutdown")
 
 

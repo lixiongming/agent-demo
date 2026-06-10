@@ -15,7 +15,7 @@ def run_server():
 ╔══════════════════════════════════════╗
 ║     Agent Service 启动               ║
 ║     地址: http://localhost:8000      ║
-║     文档: http://localhost:8000/docs ║
+║     文档: http://localhost:8000/docs ║``                                                                                                                    
 ╚══════════════════════════════════════╝
 """)
     

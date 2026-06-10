@@ -71,12 +71,17 @@ class ToolRegistry:
         try:
             logger.info(f"Executing tool: {name} with args: {args}")
             
-            # 同步工具
-            if not hasattr(tool.func, "__call__"):
+            # 获取工具函数
+            func = tool.func
+            if not hasattr(func, "__call__"):
                 raise ToolException(f"Tool function not callable: {name}", name)
             
-            # 执行
-            result = tool.func(**args) if args else tool.func()
+            # 判断是否是异步函数
+            import asyncio
+            if asyncio.iscoroutinefunction(func):
+                result = await func(**args) if args else await func()
+            else:
+                result = func(**args) if args else func()
             
             logger.info(f"Tool {name} executed successfully")
             return result
