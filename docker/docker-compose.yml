@@ -48,7 +48,7 @@ services:
       - "6333:6333"
       - "6334:6334"
     volumes:
-      - qdrant_data:/qdrant/storage
+      - ../data/volumes/qdrant:/qdrant/storage
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
       interval: 30s
@@ -66,7 +66,7 @@ services:
     ports:
       - "3306:3306"
     volumes:
-      - mysql_data:/var/lib/mysql
+      - ../data/volumes/mysql:/var/lib/mysql
       # 不再挂载 SQL 文件，让 init_db() 自动创建表结构（与本地一致）
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p123456"]
@@ -83,7 +83,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - ../data/volumes/redis:/data
     command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -115,11 +115,6 @@ services:
     restart: unless-stopped
     networks:
       - agent_network
-
-volumes:
-  mysql_data:
-  redis_data:
-  qdrant_data:
 
 networks:
   agent_network:

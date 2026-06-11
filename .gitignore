@@ -50,6 +50,14 @@ data/backups/*.sql
 data/backups/*.sql.gz
 !data/backups/.gitkeep
 
+# Docker volumes（忽略数据，保留目录结构）
+data/volumes/mysql/*
+data/volumes/redis/*
+data/volumes/qdrant/*
+!data/volumes/mysql/.gitkeep
+!data/volumes/redis/.gitkeep
+!data/volumes/qdrant/.gitkeep
+
 # Testing
 .pytest_cache/
 .coverage

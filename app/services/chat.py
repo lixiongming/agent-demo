@@ -47,7 +47,7 @@ class ChatService:
                 user_id=user_id
             )
         
-        # 获取历史消息
+        # 获取历史消息（对话使用最近 20 条）
         history = await self.message_repo.get_recent(session.id, limit=20)
         
         # 构建消息列表
@@ -61,7 +61,7 @@ class ChatService:
             elif msg.role == "assistant":
                 messages.append(AIMessage(content=msg.content))
         
-        # ===== RAG 检索（生产级别：三级相似度策略） =====
+        # ===== RAG 检索（三级相似度策略） =====
         rag_context = None
         rag_strategy = None  # 记录使用的策略
         best_score = 0.0
@@ -248,7 +248,7 @@ class ChatService:
             elif msg.role == "assistant":
                 messages.append(AIMessage(content=msg.content))
         
-        # ===== RAG 检索（生产级别：三级相似度策略） =====
+        # ===== RAG 检索（三级相似度策略） =====
         rag_context = None
         rag_strategy = None
         best_score = 0.0

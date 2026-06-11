@@ -102,9 +102,12 @@ langchain/
 │   ├── core/                   # 核心模块
 │   │   ├── container.py        # 依赖注入容器
 │   │   ├── interfaces.py       # 接口抽象
-│   │   ├── logger.py           # 日志管理
-│   │   └ middleware.py         # 中间件
-│   │   └ exceptions.py         # 异常定义
+│   │   ├── logger.py           # 日志管理（按日期滚动）
+│   │   ├── middleware.py       # 中间件
+│   │   ├── exceptions.py       # 异常定义
+│   │   ├── error_codes.py      # 错误码定义
+│   │   ├── rate_limit.py       # 限流/熔断
+│   │   └── metrics.py          # 监控指标
 │   │
 │   ├── utils/                  # 工具函数
 │   │   ├── helpers.py          # 辅助函数
@@ -192,10 +195,10 @@ docker-compose logs -f api     # 查看日志
 docker-compose down            # 停止服务
 docker-compose up -d           # 日常启动（推荐）
 docker-compose up -d --build   # 代码变化时才使用 --build
-docker-compose build --no-cache api  # 强制重建,依赖更新后使用
+docker-compose build api --no-cache  # 强制重建,依赖更新后使用
 ```
 
-### 4. 导入知识库
+### 4. 导入知识库（参考 LOL 知识库导入）
 
 ```bash
 # 将 LOL 知识库导入到 Qdrant
@@ -203,6 +206,22 @@ docker-compose exec api python scripts/lol_knowledge_to_qdrant.py \
     "/app/data/lol_knowledge_base.md" \
     --host qdrant \
     --port 6333
+```
+
+### 5. 数据库备份和恢复
+
+```bash
+# 进入 ops 目录
+cd ops
+
+# 备份 MySQL
+./backup_mysql.sh
+
+# 恢复 MySQL（指定备份文件）
+./restore_mysql.sh ../data/backups/agent_db_YYYYMMDD.sql.gz
+
+# 查看备份文件
+ls ../data/backups/
 ```
 
 ## 服务地址
@@ -221,7 +240,23 @@ docker-compose exec api python scripts/lol_knowledge_to_qdrant.py \
 
 ### 健康检查
 ```bash
+# 基础健康检查
 curl http://localhost:8888/api/v1/health
+
+# 详细依赖检查（数据库、Redis、Qdrant）
+curl http://localhost:8888/api/v1/ready
+
+# 应用信息
+curl http://localhost:8888/api/v1/info
+
+# 系统指标（请求统计、LLM调用、RAG检索）
+curl http://localhost:8888/api/v1/metrics
+
+# 熔断器状态
+curl http://localhost:8888/api/v1/circuit-breakers
+
+# 重置熔断器
+curl -X POST http://localhost:8888/api/v1/circuit-breakers/reset
 ```
 
 ### 对话接口（ReAct 模式）
@@ -375,42 +410,54 @@ A: 在 `app/tools/` 目录创建新工具文件，然后在 `registry.py` 中注
 | Redis | 7 | 缓存 |
 | 智谱 AI | embedding-3 | Embedding API |
 
-## 开发指南
+## 生产级别功能
 
-### 添加新工具
+### 1. 限流和熔断
 
-1. 创建工具文件 `app/tools/new_tool.py`：
+**限流**：防止 API 过载，基于 Redis 滑动窗口算法
 ```python
-from langchain_core.tools import tool
+from app.core import rate_limit
 
-@tool
-def new_tool(query: str) -> str:
-    """工具描述"""
-    return "结果"
+@rate_limit("chat", limit=50, period=60)
+async def chat_endpoint():
+    ...
 ```
 
-2. 在 `app/tools/registry.py` 注册：
+**熔断器**：防止级联故障，自动恢复
 ```python
-from app.tools.new_tool import new_tool
+from app.core import llm_breaker
 
-TOOLS = [calculator, weather, search, knowledge, new_tool]
+async def call_llm():
+    with llm_breaker:
+        return await llm.invoke()
 ```
 
-### 添加新 API 接口
+### 2. 统一错误码
 
-1. 创建接口文件 `app/api/v1/new_api.py`：
-```python
-from fastapi import APIRouter
-
-router = APIRouter()
-
-@router.post("/new")
-async def new_endpoint():
-    return {"result": "ok"}
+所有 API 返回统一格式的错误响应：
+```json
+{
+  "code": 2001,
+  "message": "会话不存在",
+  "data": null,
+  "error": {
+    "level": "warning",
+    "solution": "请创建新会话或检查会话ID"
+  }
+}
 ```
 
-2. 在 `app/api/v1/__init__.py` 注册路由：
-```python
-from app.api.v1.new_api import router as new_router
-app.include_router(new_router, prefix="/new", tags=["new"])
-```
+### 3. 监控指标
+
+自动收集以下指标：
+- 请求统计（计数、延迟、错误率）
+- LLM 调用（次数、Token、延迟）
+- RAG 检索（命中率、延迟）
+- 数据库查询（次数、延迟）
+
+### 4. 日志管理
+
+- 按日期滚动（每天一个文件）
+- 自动压缩（节省 ~70% 存储空间）
+- 自动清理（保留 30 天）
+- 结构化 JSON 格式

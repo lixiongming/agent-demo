@@ -1,0 +1,2 @@
+# Qdrant 向量数据库存储目录
+# Docker volume 绑定挂载到此目录

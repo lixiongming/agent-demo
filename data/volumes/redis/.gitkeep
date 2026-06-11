@@ -1,0 +1,2 @@
+# Redis 数据存储目录
+# Docker volume 绑定挂载到此目录
