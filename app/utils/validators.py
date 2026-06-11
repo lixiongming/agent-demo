@@ -27,8 +27,7 @@ def validate_username(username: str) -> bool:
 def validate_model_name(model_name: str) -> bool:
     """验证模型名称"""
     valid_models = [
-        "qwen3.7-plus", "qwen3.7-lite",
-        "qwen-max", "qwen-plus", "qwen-turbo",
+        "qwen3-max", "qwen-plus", "qwen-turbo",
         "gpt-4", "gpt-3.5-turbo"
     ]
     return model_name in valid_models

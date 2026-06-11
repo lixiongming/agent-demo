@@ -631,11 +631,15 @@ def get_qdrant_adapter(
         use_memory: 是否使用内存模式
     """
     settings = get_settings()
+    
+    # 从配置获取向量维度
+    vector_size = getattr(settings, "EMBEDDING_DIM", 2048)
 
     return QdrantVectorStoreAdapter(
         collection_name=collection_name,
         host=getattr(settings, "QDRANT_HOST", "localhost"),
         port=getattr(settings, "QDRANT_PORT", 6333),
         use_memory=use_memory,
+        vector_size=vector_size,  # 使用配置的向量维度
         **kwargs
     )

@@ -58,6 +58,11 @@ docker/*
 # 数据文件
 data/*.csv
 data/*.json
+data/volumes
+data/volumes/**
+data/backups/*.sql
+data/backups/*.sql.gz
+!data/backups/.gitkeep
 
 # 其他
 .DS_Store

@@ -12,13 +12,15 @@ from app.config import get_settings
 from app.core.logger import get_logger
 from app.core.metrics import Metrics
 from app.core.rate_limit import CircuitBreakerManager
-from app.core.constants import APIConstants
 import time
 import asyncio
 
 router = APIRouter()
 logger = get_logger(__name__)
 settings = get_settings()
+
+# 本地常量定义
+API_PREFIX = "/api/v1"
 
 
 @router.get("/health", response_model=SuccessResponse)

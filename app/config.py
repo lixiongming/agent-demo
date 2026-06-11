@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     # LLM配置（阿里云 DashScope）
     DASHSCOPE_API_KEY: str = ""
     DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    DEFAULT_MODEL: str = "qwen3.7-plus"
+    DEFAULT_MODEL: str = "qwen3-max"
     MAX_TOKENS: int = 4096
     TEMPERATURE: float = 0.7
 
@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     EMBEDDING_PROVIDER: str = "zhipu"  # 提供商: zhipu, openai, local
     EMBEDDING_MODEL_NAME: str = "embedding-3"  # 模型名称
     EMBEDDING_API_KEY: str = ""  # Embedding API Key（统一变量）
+    EMBEDDING_DIM: int = 2048  # 向量维度（智谱 embedding-3 = 2048）
 
     # OpenAI Embedding 配置（可选）
     OPENAI_API_KEY: str = ""  # OpenAI API Key（已废弃，使用 EMBEDDING_API_KEY）

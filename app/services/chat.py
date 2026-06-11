@@ -16,9 +16,18 @@ settings = get_settings()
 
 
 def get_rag_service():
-    """获取 RAG 服务"""
-    from app.services.rag import RAGService
-    return RAGService()
+    """获取 RAG 服务（单例模式）
+    
+    生产标准：
+    - 使用容器获取单例
+    - 只初始化一次
+    - 后续请求直接获取
+    """
+    from app.core.container import DIContainer
+    from app.core.interfaces import IRAGService
+    
+    # 使用容器获取单例
+    return DIContainer.get(IRAGService)
 
 
 class ChatService:

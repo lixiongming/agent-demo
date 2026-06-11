@@ -7,7 +7,7 @@ from datetime import datetime
 class SessionCreate(BaseModel):
     """创建会话请求"""
     agent_type: str = Field(default="chat", description="Agent类型")
-    model_name: str = Field(default="qwen3.7-plus", description="模型名称")
+    model_name: str = Field(default="qwen3-max", description="模型名称")
     title: Optional[str] = Field(None, description="会话标题")
     system_prompt: Optional[str] = Field(None, description="系统提示词")
     config: Optional[dict] = Field(None, description="配置")

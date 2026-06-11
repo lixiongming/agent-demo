@@ -108,7 +108,6 @@ class CostTracker(BaseCallbackHandler):
     # 价格表（每1000 tokens）
     PRICES = {
         "qwen3-max": {"input": 0.04, "output": 0.12},
-        "qwen3.7-plus": {"input": 0.004, "output": 0.012},
         "gpt-4": {"input": 0.03, "output": 0.06},
         "gpt-3.5-turbo": {"input": 0.0015, "output": 0.002}
     }

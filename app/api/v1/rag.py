@@ -29,22 +29,22 @@ from app.schemas.rag import (
 )
 from app.services.rag import RAGService
 from app.core.logger import get_logger
+from app.core.container import DIContainer
+from app.core.interfaces import IRAGService
 
 logger = get_logger(__name__)
 router = APIRouter()
 
-# 全局RAG服务实例
-rag_service: Optional[RAGService] = None
-
 
 def get_rag_service() -> RAGService:
-    """获取RAG服务实例（懒加载）"""
-    global rag_service
-    if rag_service is None:
-        logger.info("正在初始化 RAG 服务...")
-        rag_service = RAGService()
-        logger.info("RAG 服务初始化完成")
-    return rag_service
+    """获取RAG服务实例（容器单例）
+    
+    生产标准：
+    - 使用容器获取单例
+    - 只初始化一次
+    - 后续请求直接获取
+    """
+    return DIContainer.get(IRAGService)
 
 
 # ============================================

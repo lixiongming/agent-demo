@@ -168,10 +168,11 @@ def setup_container(collection_name: str = "knowledge_base", use_memory: bool = 
     - 使用插件化 Embedding 服务
     - 支持配置驱动的 Provider 切换
     - 无需重建容器即可切换模型
+    - 服务单例化（生产标准）
     """
     from app.core.interfaces import (
         IEmbeddingService, IVectorStore, ILLMService,
-        IDocumentLoader, IRetriever, IToolRegistry
+        IDocumentLoader, IRetriever, IToolRegistry, IRAGService
     )
     from app.embeddings import get_embedding_service
     from app.embeddings.qdrant_store import get_qdrant_adapter
@@ -179,6 +180,7 @@ def setup_container(collection_name: str = "knowledge_base", use_memory: bool = 
     from app.embeddings.document import DocumentLoader
     from app.embeddings.retriever import Retriever
     from app.tools.registry import ToolRegistry
+    from app.services.rag import RAGService
     from app.config import get_settings
     
     settings = get_settings()
@@ -192,9 +194,13 @@ def setup_container(collection_name: str = "knowledge_base", use_memory: bool = 
     DIContainer.bind(IRetriever, Retriever)
     DIContainer.bind(IToolRegistry, ToolRegistry)
     
+    # 注册 RAGService 为单例（生产标准）
+    DIContainer.bind(IRAGService, RAGService)
+    
     logger.info(
         f"DI Container configured with Qdrant (collection: {collection_name}), "
-        f"Embedding provider: {settings.EMBEDDING_PROVIDER}"
+        f"Embedding provider: {settings.EMBEDDING_PROVIDER}, "
+        f"Services: singleton mode"
     )
 
 

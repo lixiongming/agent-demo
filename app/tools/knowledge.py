@@ -5,19 +5,21 @@
 from typing import Dict, Any, Optional
 from app.services.rag import RAGService
 from app.core.logger import get_logger
+from app.core.container import DIContainer
+from app.core.interfaces import IRAGService
 
 logger = get_logger(__name__)
 
-# RAG服务实例
-_rag_service: Optional[RAGService] = None
-
 
 def get_rag_service() -> RAGService:
-    """获取RAG服务实例"""
-    global _rag_service
-    if _rag_service is None:
-        _rag_service = RAGService()
-    return _rag_service
+    """获取RAG服务实例（容器单例）
+    
+    生产标准：
+    - 使用容器获取单例
+    - 只初始化一次
+    - 后续请求直接获取
+    """
+    return DIContainer.get(IRAGService)
 
 
 async def knowledge_search(

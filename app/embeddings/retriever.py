@@ -47,7 +47,7 @@ class Retriever:
         self.threshold = threshold
         self.rerank_enabled = rerank_enabled
         
-    def retrieve(
+    async def retrieve(
         self,
         query: str,
         top_k: int = None,
@@ -71,7 +71,7 @@ class Retriever:
         threshold = threshold or self.threshold
         
         # 查询向量化
-        query_embedding = self.embedding_service.embed_text(query)
+        query_embedding = await self.embedding_service.embed_text(query)
         
         # 向量检索
         results = self.vector_store.search_by_similarity(
@@ -91,7 +91,7 @@ class Retriever:
         
         return results[:top_k]
     
-    def hybrid_retrieve(
+    async def hybrid_retrieve(
         self,
         query: str,
         top_k: int = None,
@@ -113,7 +113,7 @@ class Retriever:
         """
         # 当前仅使用向量检索
         # 生产环境建议集成 Elasticsearch 实现真正的混合检索
-        return self.retrieve(query, top_k=top_k)
+        return await self.retrieve(query, top_k=top_k)
     
     def _rerank(
         self,

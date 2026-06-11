@@ -255,3 +255,46 @@ class IMemoryService(ABC):
     async def delete(self, key: str):
         """删除记忆"""
         pass
+
+
+class IRAGService(ABC):
+    """RAG 服务接口"""
+    
+    @abstractmethod
+    async def query(
+        self,
+        question: str,
+        top_k: int = 5,
+        threshold: float = 0.5,
+        doc_type: Optional[str] = None,
+        filters: Dict[str, Any] = None,
+        hybrid: bool = False
+    ) -> Dict[str, Any]:
+        """查询
+        
+        Args:
+            question: 问题
+            top_k: 返回数量
+            threshold: 相似度阈值
+            doc_type: 文档类型过滤
+            filters: 其他过滤条件
+            hybrid: 是否混合检索
+            
+        Returns:
+            查询结果
+        """
+        pass
+    
+    @abstractmethod
+    async def ingest_file(
+        self,
+        file_path: str,
+        metadata: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """导入文件"""
+        pass
+    
+    @abstractmethod
+    async def get_stats(self) -> Dict[str, Any]:
+        """获取统计信息"""
+        pass

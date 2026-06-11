@@ -113,7 +113,7 @@ class RAGService:
         
         # 2. 批量向量化
         contents = [chunk.content for chunk in chunks]
-        embeddings = self.embedding_service.embed_texts(contents)
+        embeddings = await self.embedding_service.embed_texts(contents)
         
         # 3. 批量存储
         documents = []
@@ -173,7 +173,7 @@ class RAGService:
             }
         
         contents = [chunk.content for chunk in chunks]
-        embeddings = self.embedding_service.embed_texts(contents)
+        embeddings = await self.embedding_service.embed_texts(contents)
         
         documents = []
         for i, chunk in enumerate(chunks):
@@ -217,7 +217,7 @@ class RAGService:
         Returns:
             文档ID
         """
-        embedding = self.embedding_service.embed_text(content)
+        embedding = await self.embedding_service.embed_text(content)
         
         doc_id = self.vector_store.add_document(
             content=content,
@@ -257,9 +257,9 @@ class RAGService:
         
         # 1. 检索相关文档
         if hybrid:
-            results = self.retriever.hybrid_retrieve(question, top_k=top_k)
+            results = await self.retriever.hybrid_retrieve(question, top_k=top_k)
         else:
-            results = self.retriever.retrieve(
+            results = await self.retriever.retrieve(
                 question,
                 top_k=top_k,
                 threshold=threshold,

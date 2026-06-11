@@ -70,7 +70,6 @@ class LLMFactory:
         """获取可用模型列表"""
         return [
             "qwen3-max",
-            "qwen3.7-plus",
             "qwen3.7-lite",
             "qwen-plus",
             "qwen-turbo",

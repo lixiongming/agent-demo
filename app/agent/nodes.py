@@ -5,23 +5,23 @@ from app.agent.state import AgentState, ChatState
 from app.llm.factory import get_llm
 from app.tools.registry import ToolRegistry
 from app.core.logger import get_logger
+from app.core.container import DIContainer
+from app.core.interfaces import IRAGService
 from app.config import get_settings
 
 logger = get_logger(__name__)
 settings = get_settings()
 
 
-# RAG 服务（懒加载）
-_rag_service = None
-
-
 def get_rag_service():
-    """获取 RAG 服务"""
-    global _rag_service
-    if _rag_service is None:
-        from app.services.rag import RAGService
-        _rag_service = RAGService()
-    return _rag_service
+    """获取 RAG 服务（容器单例）
+    
+    生产标准：
+    - 使用容器获取单例
+    - 只初始化一次
+    - 后续请求直接获取
+    """
+    return DIContainer.get(IRAGService)
 
 
 async def rag_retrieve_node(state: AgentState) -> Dict[str, Any]:
