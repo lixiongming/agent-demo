@@ -1,19 +1,26 @@
+# ============================================
+# Docker Compose - 生产环境配置
+# ============================================
+# 使用方式：
+#   docker-compose -f docker-compose.prod.yml up -d --build
+# ============================================
+
 services:
-  # API 服务
+  # API 服务（生产环境）
   api:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.prod
     env_file:
-      - ../.env  # 使用项目根目录的 .env 文件
+      - ../.env
     ports:
       - "8888:8888"
     environment:
-      # MySQL 配置（连接 Docker 内部 MySQL）
+      # MySQL 配置
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=root
-      - MYSQL_PASSWORD=123456
+      - MYSQL_PASSWORD=${MYSQL_ROOT_PASSWORD:-123456}
       - MYSQL_DATABASE=agent_db
       # Redis 配置
       - REDIS_HOST=redis
@@ -22,6 +29,8 @@ services:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - QDRANT_COLLECTION=knowledge_base
+      # 生产环境标志
+      - ENVIRONMENT=production
     depends_on:
       mysql:
         condition: service_healthy
@@ -30,14 +39,22 @@ services:
       qdrant:
         condition: service_started
     volumes:
+      # 生产环境：只挂载日志和数据目录，不挂载代码
       - ../logs:/app/logs
       - ../models:/app/models:ro
-      # 开发模式：挂载代码目录（代码变化自动生效，无需重新构建）
-      - ../app:/app/app
-      - ../main.py:/app/main.py
-      - ../run_server.py:/app/run_server.py
-    # 开发模式：启用热更新（代码变化自动重载）
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8888 --reload
+    # 生产环境：多 worker，无热更新
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8888 --workers 4
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    # 自动重启策略
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8888/api/v1/health"]
       interval: 30s
@@ -46,6 +63,12 @@ services:
       start_period: 60s
     networks:
       - agent_network
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
 
   # Qdrant 向量数据库
   qdrant:
@@ -60,44 +83,73 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     networks:
       - agent_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
-  # MySQL（使用 3306 端口避免与本地 MySQL 冲突）
+  # MySQL 数据库
   mysql:
     image: mysql:8.0
     environment:
-      - MYSQL_ROOT_PASSWORD=123456
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-123456}
       - MYSQL_DATABASE=agent_db
     ports:
       - "3306:3306"
     volumes:
       - ../data/volumes/mysql:/var/lib/mysql
-      # 不再挂载 SQL 文件，让 init_db() 自动创建表结构（与本地一致）
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p123456"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-123456}"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     networks:
       - agent_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
-  # Redis
+  # Redis 缓存
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     volumes:
       - ../data/volumes/redis:/data
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
       timeout: 10s
       retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     networks:
       - agent_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   # MySQL 定时备份服务
   backup:
@@ -110,7 +162,7 @@ services:
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=root
-      - MYSQL_PASSWORD=123456
+      - MYSQL_PASSWORD=${MYSQL_ROOT_PASSWORD:-123456}
       - MYSQL_DATABASE=agent_db
     volumes:
       - ../data/backups:/app/data/backups
@@ -121,6 +173,11 @@ services:
     restart: unless-stopped
     networks:
       - agent_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
 networks:
   agent_network:
