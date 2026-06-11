@@ -48,7 +48,7 @@ COPY data ./data
 RUN mkdir -p logs
 
 # 暴露端口
-EXPOSE 8000
+EXPOSE 8888
 
 # 启动命令
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8888", "--workers", "1"]

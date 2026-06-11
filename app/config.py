@@ -50,25 +50,25 @@ class Settings(BaseSettings):
             return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
     
-    # LLM配置
+    # LLM配置（阿里云 DashScope）
     DASHSCOPE_API_KEY: str = ""
     DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     DEFAULT_MODEL: str = "qwen3.7-plus"
     MAX_TOKENS: int = 4096
     TEMPERATURE: float = 0.7
-    
+
     # Agent配置
     MAX_ITERATIONS: int = 10
     AGENT_TIMEOUT: int = 60
-    
-    # Embedding模型配置
-    EMBEDDING_MODEL_NAME: str = "bge-large-zh-v1.5"
-    EMBEDDING_MODEL_PATH: str = "models"  # 模型存放目录
 
-    @property
-    def get_embedding_model_path(self) -> str:
-        """获取完整的模型路径"""
-        return os.path.join(os.getcwd(), self.EMBEDDING_MODEL_PATH, self.EMBEDDING_MODEL_NAME)
+    # Embedding 配置
+    EMBEDDING_PROVIDER: str = "zhipu"  # 提供商: zhipu, openai, local
+    EMBEDDING_MODEL_NAME: str = "embedding-3"  # 模型名称
+    EMBEDDING_API_KEY: str = ""  # Embedding API Key（统一变量）
+
+    # OpenAI Embedding 配置（可选）
+    OPENAI_API_KEY: str = ""  # OpenAI API Key（已废弃，使用 EMBEDDING_API_KEY）
+    OPENAI_BASE_URL: str = ""  # OpenAI API Base URL（可选）
 
     # Qdrant 向量数据库配置
     QDRANT_HOST: str = "localhost"

@@ -7,7 +7,7 @@ services:
     env_file:
       - ../.env  # 使用项目根目录的 .env 文件
     ports:
-      - "8000:8000"
+      - "8888:8888"
     environment:
       # MySQL 配置（连接 Docker 内部 MySQL）
       - MYSQL_HOST=mysql
@@ -22,8 +22,6 @@ services:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - QDRANT_COLLECTION=knowledge_base
-      # Embedding 配置
-      - EMBEDDING_MODEL_NAME=bge-large-zh-v1.5
     depends_on:
       mysql:
         condition: service_healthy
@@ -35,11 +33,13 @@ services:
       - ../logs:/app/logs
       - ../models:/app/models:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8888/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
+    networks:
+      - agent_network
 
   # Qdrant 向量数据库
   qdrant:
@@ -54,6 +54,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - agent_network
 
   # MySQL（使用 3306 端口避免与本地 MySQL 冲突）
   mysql:
@@ -72,6 +74,8 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    networks:
+      - agent_network
 
   # Redis
   redis:
@@ -86,8 +90,37 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - agent_network
+
+  # MySQL 定时备份服务
+  backup:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backup
+    env_file:
+      - ../.env
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=123456
+      - MYSQL_DATABASE=agent_db
+    volumes:
+      - ../data/backups:/app/data/backups
+      - ../logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - agent_network
 
 volumes:
   mysql_data:
   redis_data:
   qdrant_data:
+
+networks:
+  agent_network:
+    driver: bridge

@@ -1,0 +1,39 @@
+# ============================================
+# MySQL 定时备份容器
+# ============================================
+
+FROM python:3.12-slim
+
+# 安装 cron 和 MySQL 客户端
+RUN apt-get update && apt-get install -y \
+    cron \
+    mariadb-client-compat \
+    gzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# 设置环境变量
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# 复制备份脚本
+COPY ops/backup_mysql.sh /app/ops/backup_mysql.sh
+RUN chmod +x /app/ops/backup_mysql.sh
+
+# 创建备份目录
+RUN mkdir -p /app/data/backups
+
+# 配置 cron 定时任务（每天凌晨 2 点备份）
+RUN echo "0 2 * * * /app/ops/backup_mysql.sh >> /app/logs/backup.log 2>&1" > /etc/cron.d/mysql-backup \
+    && chmod 0644 /etc/cron.d/mysql-backup \
+    && crontab /etc/cron.d/mysql-backup
+
+# 创建日志目录
+RUN mkdir -p /app/logs
+
+# 启动脚本
+COPY ops/start_cron.sh /app/start_cron.sh
+RUN chmod +x /app/start_cron.sh
+
+CMD ["/app/start_cron.sh"]

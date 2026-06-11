@@ -163,27 +163,39 @@ def setup_container(collection_name: str = "knowledge_base", use_memory: bool = 
     Args:
         collection_name: Qdrant 集合名称
         use_memory: 是否使用内存模式（测试用）
+    
+    改进：
+    - 使用插件化 Embedding 服务
+    - 支持配置驱动的 Provider 切换
+    - 无需重建容器即可切换模型
     """
     from app.core.interfaces import (
         IEmbeddingService, IVectorStore, ILLMService,
         IDocumentLoader, IRetriever, IToolRegistry
     )
-    from app.embeddings.embedding import EmbeddingService
+    from app.embeddings import get_embedding_service
     from app.embeddings.qdrant_store import get_qdrant_adapter
     from app.llm.factory import LLMFactory
     from app.embeddings.document import DocumentLoader
     from app.embeddings.retriever import Retriever
     from app.tools.registry import ToolRegistry
+    from app.config import get_settings
     
-    # 绑定接口到实现
-    DIContainer.bind(IEmbeddingService, EmbeddingService)
+    settings = get_settings()
+    
+    # 绑定接口到实现（使用插件化 Embedding）
+    # 根据 EMBEDDING_PROVIDER 配置自动选择服务
+    DIContainer.bind_factory(IEmbeddingService, get_embedding_service)
     DIContainer.bind_factory(IVectorStore, lambda: get_qdrant_adapter(collection_name, use_memory))
     DIContainer.bind_factory(ILLMService, lambda: LLMServiceAdapter())
     DIContainer.bind(IDocumentLoader, DocumentLoader)
     DIContainer.bind(IRetriever, Retriever)
     DIContainer.bind(IToolRegistry, ToolRegistry)
     
-    logger.info(f"DI Container configured with Qdrant (collection: {collection_name})")
+    logger.info(
+        f"DI Container configured with Qdrant (collection: {collection_name}), "
+        f"Embedding provider: {settings.EMBEDDING_PROVIDER}"
+    )
 
 
 class LLMServiceAdapter:

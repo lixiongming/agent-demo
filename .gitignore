@@ -27,6 +27,9 @@ env/
 venv/
 ENV/
 
+# Docker environment files
+docker/.env
+
 # IDE
 .idea/
 .vscode/
@@ -41,6 +44,11 @@ logs/
 # Database
 *.db
 *.sqlite3
+
+# Backups
+data/backups/*.sql
+data/backups/*.sql.gz
+!data/backups/.gitkeep
 
 # Testing
 .pytest_cache/

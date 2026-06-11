@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 import os
 
-from app.embeddings import EmbeddingService, DocumentLoader, Retriever, DocumentChunk
+from app.embeddings import ZhipuEmbeddingService, DocumentLoader, Retriever, DocumentChunk, get_embedding_service
 from app.embeddings.qdrant_store import get_qdrant_adapter
 from app.config import get_settings
 from app.core.logger import get_logger
@@ -68,20 +68,8 @@ class RAGService:
         if embedding_service:
             self.embedding_service = embedding_service
         else:
-            embedding_model = embedding_model or settings.EMBEDDING_MODEL_NAME
-            model_path = settings.get_embedding_model_path
-            
-            if not os.path.exists(model_path):
-                alt_path = os.path.join(os.getcwd(), "models", embedding_model)
-                if os.path.exists(alt_path):
-                    model_path = alt_path
-                else:
-                    model_path = None
-            
-            self.embedding_service = EmbeddingService(
-                model_name=embedding_model,
-                model_path=model_path
-            )
+            # 使用智谱 AI Embedding 服务
+            self.embedding_service = get_embedding_service()
         
         if vector_store:
             self.vector_store = vector_store

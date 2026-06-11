@@ -60,7 +60,7 @@ docker-compose ps
 echo.
 echo ============================================
 echo 服务地址:
-echo   API:      http://localhost:8000
+echo   API:      http://localhost:8888
 echo   Qdrant:   http://localhost:6333
 echo   MySQL:    localhost:3306
 echo   Redis:    localhost:6379

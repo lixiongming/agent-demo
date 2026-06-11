@@ -369,11 +369,14 @@ class ChatService:
         # 流式调用LLM
         llm = get_llm(session.model_name)
         full_response = []
-        
+
         async for chunk in llm.astream(messages):
             content = chunk.content
-            full_response.append(content)
-            yield {"content": content}
+            # 过滤空字符串，避免推送无意义的空内容
+            if content and content.strip():
+                clean_content = content.strip()  # ✅ 去除前后空格
+                full_response.append(clean_content)
+                yield {"content": clean_content}
         
         # 保存完整响应
         complete_response = "".join(full_response)

@@ -14,15 +14,15 @@ def run_server():
     print("""
 ╔══════════════════════════════════════╗
 ║     Agent Service 启动               ║
-║     地址: http://localhost:8000      ║
-║     文档: http://localhost:8000/docs ║``                                                                                                                    
+║     地址: http://localhost:8888      ║
+║     文档: http://localhost:8888/docs ║``                                                                                                                    
 ╚══════════════════════════════════════╝
 """)
     
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8888,
         reload=True,
         reload_dirs=["app"]
     )

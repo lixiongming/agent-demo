@@ -119,13 +119,6 @@ langchain/
 │   ├── start.sh                # Linux 启动脚本
 │   └ start.bat                 # Windows 启动脚本
 │
-├── models/                     # 本地模型目录
-│   └── bge-large-zh-v1.5/      # Embedding 模型（1024维）
-│       ├── config.json
-│       ├── pytorch_model.bin
-│       ├── tokenizer.json
-│       └ vocab.txt
-│
 ├── scripts/                    # 工具脚本
 │   ├── lol_knowledge_to_qdrant.py  # LOL 知识库导入
 │   ├── init_db.py              # 数据库初始化
@@ -174,29 +167,32 @@ cp .env.example .env
 # DASHSCOPE_API_KEY=your_api_key_here  # 通义千问 API Key（必须）
 ```
 
-### 3. Docker 一键启动
+### 3. Docker 启动
 
-```powershell
+```bash
 # 进入 docker 目录
 cd docker
 
-# 启动所有服务
+# 启动服务
 docker-compose up -d
 
-# 查看服务状态
-docker-compose ps
+# 重新构建并启动（代码变化时）
+docker-compose up -d --build
+```
 
-# 查看 API 日志
-docker-compose logs -f api
+**依赖安装说明：**
+- ✅ 依赖安装使用 Docker 缓存，构建速度很快（约 2-3 秒）
+- ✅ 只有 `requirements.txt` 变化时才重新安装依赖
+- ✅ 代码变化只重新构建代码层
 
-# 停止所有服务
-docker-compose down
-
-# 重新构建 API 镜像（如果需要更新代码）
-docker-compose build --no-cache api; 
-
-# 重新启动所有服务
-docker-compose up -d
+**常用命令：**
+```bash
+docker-compose ps              # 查看状态
+docker-compose logs -f api     # 查看日志
+docker-compose down            # 停止服务
+docker-compose up -d           # 日常启动（推荐）
+docker-compose up -d --build   # 代码变化时才使用 --build
+docker-compose build --no-cache api  # 强制重建,依赖更新后使用
 ```
 
 ### 4. 导入知识库
@@ -213,9 +209,9 @@ docker-compose exec api python scripts/lol_knowledge_to_qdrant.py \
 
 | 服务 | 地址 | 说明 |
 |------|------|------|
-| API | http://localhost:8000 | FastAPI 服务 |
-| API 文档 | http://localhost:8000/docs | Swagger UI |
-| ReAct 文档 | http://localhost:8000/redoc | ReDoc 文档 |
+| API | http://localhost:8888 | FastAPI 服务 |
+| API 文档 | http://localhost:8888/docs | Swagger UI |
+| ReAct 文档 | http://localhost:8888/redoc | ReDoc 文档 |
 | Qdrant | http://localhost:6333 | 向量数据库 |
 | Qdrant Dashboard | http://localhost:6333/dashboard | 管理界面 |
 | MySQL | localhost:3306 | 数据库 |
@@ -225,12 +221,12 @@ docker-compose exec api python scripts/lol_knowledge_to_qdrant.py \
 
 ### 健康检查
 ```bash
-curl http://localhost:8000/api/v1/health
+curl http://localhost:8888/api/v1/health
 ```
 
 ### 对话接口（ReAct 模式）
 ```bash
-curl -X POST http://localhost:8000/api/v1/chat \
+curl -X POST http://localhost:8888/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "今天北京天气怎么样？", "session_id": "test"}'
 ```
@@ -245,7 +241,7 @@ Agent: 根据结果回答：北京今天天气晴朗，气温25度
 
 ### RAG 查询
 ```bash
-curl -X POST http://localhost:8000/api/v1/rag/query \
+curl -X POST http://localhost:8888/api/v1/rag/query \
   -H "Content-Type: application/json" \
   -d '{"question": "亚索怎么玩"}'
 ```
@@ -253,10 +249,10 @@ curl -X POST http://localhost:8000/api/v1/rag/query \
 ### 会话管理
 ```bash
 # 创建会话
-curl -X POST http://localhost:8000/api/v1/sessions
+curl -X POST http://localhost:8888/api/v1/sessions
 
 # 获取会话历史
-curl http://localhost:8000/api/v1/sessions/{session_id}/messages
+curl http://localhost:8888/api/v1/sessions/{session_id}/messages
 ```
 
 ## Agent 工具列表
@@ -319,8 +315,8 @@ QDRANT_HOST=localhost
 QDRANT_PORT=6333
 QDRANT_COLLECTION=knowledge_base
 
-# LLM 配置
-DASHSCOPE_API_KEY=your_api_key_here
+# LLM 配置（阿里云 DashScope）
+DASHSCOPE_API_KEY=your_dashscope_api_key_here
 DEFAULT_MODEL=qwen3.7-plus
 MAX_TOKENS=4096
 TEMPERATURE=0.7
@@ -329,8 +325,15 @@ TEMPERATURE=0.7
 MAX_ITERATIONS=10        # 最大循环次数
 AGENT_TIMEOUT=60         # 超时时间（秒）
 
-# Embedding 配置
-EMBEDDING_MODEL_NAME=bge-large-zh-v1.5
+# Embedding 配置（支持多种 Provider）
+EMBEDDING_PROVIDER=zhipu  # 提供商: zhipu, openai, local
+EMBEDDING_MODEL_NAME=embedding-3
+
+# 智谱 AI Embedding 配置（EMBEDDING_PROVIDER=zhipu）
+ZHIPU_API_KEY=your_zhipu_api_key_here
+
+# OpenAI Embedding 配置（EMBEDDING_PROVIDER=openai）
+# OPENAI_API_KEY=your_openai_api_key_here
 ```
 
 ### ReAct 配置说明
@@ -342,9 +345,6 @@ EMBEDDING_MODEL_NAME=bge-large-zh-v1.5
 | TEMPERATURE | 0.7 | LLM 温度参数，越高越随机 |
 
 ## 常见问题
-
-### Q: 模型文件过大，如何处理？
-A: 模型文件通过 Docker volumes 挂载，不会打包到镜像中。确保本地 `models/` 目录存在。
 
 ### Q: 如何查看 Qdrant 中的数据？
 A: 访问 http://localhost:6333/dashboard 查看集合和数据。
@@ -373,7 +373,7 @@ A: 在 `app/tools/` 目录创建新工具文件，然后在 `registry.py` 中注
 | Qdrant | latest | 向量数据库 |
 | MySQL | 8.0 | 关系数据库 |
 | Redis | 7 | 缓存 |
-| bge-large-zh-v1.5 | - | Embedding 模型（1024维） |
+| 智谱 AI | embedding-3 | Embedding API |
 
 ## 开发指南
 

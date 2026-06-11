@@ -78,7 +78,7 @@ start() {
     echo ""
     echo "============================================"
     echo "服务地址:"
-    echo "  API:      http://localhost:8000"
+    echo "  API:      http://localhost:8888"
     echo "  Qdrant:   http://localhost:6333"
     echo "  MySQL:    localhost:3306"
     echo "  Redis:    localhost:6379"
@@ -128,6 +128,22 @@ import_knowledge() {
     info "知识库导入完成"
 }
 
+# 备份 MySQL 数据库
+backup_mysql() {
+    info "备份 MySQL 数据库..."
+    cd ..
+    bash ops/backup_mysql.sh
+    cd docker
+}
+
+# 恢复 MySQL 数据库
+restore_mysql() {
+    info "恢复 MySQL 数据库..."
+    cd ..
+    bash ops/restore_mysql.sh "$2"
+    cd docker
+}
+
 # 帮助信息
 help() {
     echo "用法: ./docker/start.sh [命令]"
@@ -138,6 +154,8 @@ help() {
     echo "  logs      查看 API 日志"
     echo "  rebuild   重建服务"
     echo "  import    导入知识库"
+    echo "  backup    备份 MySQL 数据库"
+    echo "  restore   恢复 MySQL 数据库 [备份文件]"
     echo "  help      显示帮助信息"
 }
 
@@ -160,6 +178,12 @@ main() {
             ;;
         import)
             import_knowledge
+            ;;
+        backup)
+            backup_mysql
+            ;;
+        restore)
+            restore_mysql "$@"
             ;;
         help|--help|-h)
             help

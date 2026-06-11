@@ -26,12 +26,9 @@ langchain-openai==1.2.2
 langgraph==1.2.4
 langchain-core==1.4.1
 
-# 向量嵌入 (关键版本 - 必须严格匹配)
+# 向量嵌入 (使用智谱 AI API，无需本地模型)
 numpy==1.26.4                    # 必须小于 2.0，否则 torch 不兼容
-torch==2.2.0+cpu                 # CPU 版本，避免下载 NVIDIA 大文件（约200MB vs 755MB）
-# torchvision 和 torchaudio 不需要，仅用于图像/音频处理
-transformers==4.39.3             # 必须小于 4.40，兼容 torch 2.2.0
-sentence-transformers==2.7.0     # 兼容 transformers 4.39.3
+# torch 和 transformers 不需要，使用智谱 AI API
 scikit-learn==1.9.0
 scipy==1.17.1
 

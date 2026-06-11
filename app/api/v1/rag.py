@@ -8,7 +8,7 @@
 
 API 文档：
 - 所有接口都有清晰的请求参数定义
-- 访问 http://localhost:8000/docs 查看 Swagger 文档
+- 访问 http://localhost:8888/docs 查看 Swagger 文档
 """
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Body
 from fastapi.responses import JSONResponse
@@ -124,7 +124,7 @@ async def ingest_text(request: IngestTextRequest = Body(...)):
 
 **使用示例（curl）：**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/rag/ingest/file" \
+curl -X POST "http://localhost:8888/api/v1/rag/ingest/file" \
   -F "file=@document.pdf" \
   -F 'metadata={"category": "技术文档"}'
 ```
@@ -489,6 +489,6 @@ async def health_check():
         data={
             "status": "healthy",
             "service": "rag",
-            "model_path": "models/bge-large-zh-v1.5"
+            "embedding_model": "智谱 AI embedding-3"
         }
     )
