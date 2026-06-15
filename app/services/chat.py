@@ -132,7 +132,7 @@ class ChatService:
 
         from app.agent.smart_router import smart_route
         from app.llm import get_llm
-        from langchain_core.messages import HumanMessage
+        from langchain_core.messages import HumanMessage, SystemMessage
         from app.db import AsyncSessionLocal, SessionRepository, MessageRepository
         from app.core.tracing import tracer
 
@@ -165,13 +165,62 @@ class ChatService:
                     system_prompt=session.system_prompt
                 )
         
-        # ===== 2. 智能路由决策 =====
+        # ===== 2. 智能路由决策（使用LLM Function Calling） =====
         async with tracer.span("route_decision"):
+            # 使用智能路由（符合大厂标准）
             decision = await smart_route(message)
+            
             needs_retrieval = decision.get("needs_retrieval", False)
+            needs_tool = decision.get("needs_tool", False)
+            tool_name = decision.get("tool_name")
+            tool_args = decision.get("tool_args", {})
             rag_strategy = decision.get("method")
         
-        # ===== 3. RAG 检索（按需）=====
+        # ===== 3. 工具执行（按需）=====
+        tool_used = False
+        tool_result = None
+        
+        logger.info(f"路由决策结果: needs_tool={needs_tool}, tool_name={tool_name}, tool_args={tool_args}")
+        
+        if needs_tool and tool_name:
+            async with tracer.span("tool_execute"):
+                try:
+                    from app.tools.registry import get_registry
+                    
+                    logger.info(f"开始执行工具: {tool_name} with args: {tool_args}")
+                    
+                    # 使用全局工具注册中心（单例模式）
+                    tool_registry = get_registry()
+                    
+                    # 检查工具是否存在
+                    tool = tool_registry.get_tool(tool_name)
+                    if not tool:
+                        logger.error(f"工具不存在: {tool_name}")
+                        tool_used = False
+                    else:
+                        logger.info(f"工具已找到: {tool_name}, 开始执行...")
+                        
+                        # 如果工具参数为空，使用默认参数
+                        if not tool_args:
+                            tool_args = {"question": message}
+                        
+                        tool_result = await tool_registry.execute(tool_name, tool_args)
+                        
+                        logger.info(f"工具执行完成: {tool_name}, result={tool_result}")
+                        
+                        if tool_result and tool_result.get("success"):
+                            tool_used = True
+                            logger.info(f"工具执行成功: {tool_name}")
+                        else:
+                            logger.warning(f"工具执行失败: {tool_result}")
+                except Exception as e:
+                    logger.error(f"工具执行异常: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+        else:
+            logger.info(f"跳过工具执行: needs_tool={needs_tool}, tool_name={tool_name}")
+        
+        # ===== 4. RAG 检索（按需）=====
         if needs_retrieval:
             async with tracer.span("rag_retrieve"):
                 try:
@@ -240,17 +289,58 @@ class ChatService:
                         knowledge_context = "\n".join(context_parts)
                         
                         messages.insert(0, SystemMessage(
-                            content=f"""以下是知识库中检索到的相关内容，请参考这些内容回答用户问题：
-
-{knowledge_context}
-
-请基于以上知识库内容回答用户问题。如果知识库中没有相关信息，请根据你的知识回答。"""
-                        ))
+                            content=f"""以下是知识库中检索到的相关内容，请参考这些内容回答用户问题：{knowledge_context}请基于以上知识库内容回答用户问题。如果知识库中没有相关信息，请根据你的知识回答。"""))
                 except Exception as e:
                     logger.warning(f"RAG retrieve failed: {e}")
         
-        # ===== 4. 流式生成响应 =====
+        # ===== 5. 准备消息 =====
         messages.append(HumanMessage(content=message))
+        
+        # 如果有工具结果，添加到消息中
+        if tool_used and tool_result:
+            # 特殊处理新闻查询结果
+            if tool_name == "news_query" and tool_result.get("news_list"):
+                news_list = tool_result.get('news_list', [])
+                if news_list:
+                    news_info = []
+                    news_info.append(f"查询类型: {tool_result.get('result_type', '新闻')}")
+                    news_info.append(f"新闻数量: {tool_result.get('news_count', 0)}")
+                    news_info.append("\n新闻列表:")
+                    for i, news in enumerate(news_list[:10], 1):  # 最多显示10条
+                        title = news.get('title', '无标题')
+                        views = news.get('views', 0)
+                        author = news.get('author', '未知')
+                        news_info.append(f"{i}. {title} (作者: {author}, 浏览量: {views})")
+                    
+                    tool_context = "\n".join(news_info)
+                    
+                    messages.insert(0, SystemMessage(
+                        content=f"""以下是工具查询返回的新闻数据，请基于这些真实数据回答用户问题：
+
+{tool_context}
+
+请基于以上真实新闻数据回答用户问题。"""
+                    ))
+            # 特殊处理天气查询结果
+            elif tool_name == "get_weather" and tool_result.get("success"):
+                weather_desc = tool_result.get("description", "")
+                
+                messages.insert(0, SystemMessage(
+                    content=f"""以下是工具查询返回的天气数据，请基于这些真实数据回答用户问题：
+
+{weather_desc}
+
+请基于以上真实天气数据回答用户问题，用友好的语言描述天气情况。"""
+                ))
+            else:
+                # 其他工具，直接显示结果
+                messages.insert(0, SystemMessage(
+                    content=f"""以下是工具查询返回的数据，请基于这些数据回答用户问题：
+
+{tool_result}
+
+请基于以上数据回答用户问题。"""
+                ))
 
         # 打印发送给模型的消息摘要（详细日志只在 DEBUG 模式）
         logger.info(f"🚀 发送给模型的消息总数: {len(messages)}")
@@ -280,7 +370,7 @@ class ChatService:
                     full_response.append(content)
                     yield {"content": content}
         
-        # ===== 5. 保存助手消息 =====
+        # ===== 6. 流式生成响应 =====
         complete_response = "".join(full_response)
         
         async with AsyncSessionLocal() as db:

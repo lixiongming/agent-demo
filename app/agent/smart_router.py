@@ -1,89 +1,37 @@
-"""智能路由服务
+"""智能路由服务 - 符合大厂标准
 
-功能：
-- 关键词快速路径（毫秒级）
-- LLM 智能决策（带缓存）
-- 多级降级策略
-- 性能监控
+使用LLM Function Calling自动决策工具调用
+无需手动维护关键词，LLM根据工具描述自动决策
 
 标准：
-- OpenAI: 关键词 + 意图分类 + LLM 决策
-- Google: 规则引擎 + 语义理解
-- 阿里: 多级路由策略
+- OpenAI: Function Calling + 工具描述驱动
+- Google: 工具注册 + LLM自动决策
+- 阿里: 智能路由 + 缓存机制
 """
-from typing import Dict, Any, Optional
-import hashlib
-import re
-from app.core.logger import get_logger
-from app.llm.factory import get_llm
-from app.config import get_settings
-from app.prompts.templates import PromptTemplates
-from langchain_core.messages import HumanMessage
 import json
+import time
+import re
+from typing import Dict, Any, Optional
+from app.llm import get_llm
+from app.tools.tool_registry import tool_registry
+from app.core.logger import get_logger
+from app.core.tracing import tracer
 
 logger = get_logger(__name__)
-settings = get_settings()
 
 
 class SmartRouter:
     """智能路由器
     
-    三级路由策略：
-    1. 关键词快速路径（毫秒级）
-    2. 规则引擎匹配（毫秒级）
-    3. LLM 智能决策（带缓存，秒级）
+    符合大厂标准：
+    - 使用LLM Function Calling自动决策
+    - 无需手动维护关键词
+    - 工具描述驱动
+    - 支持缓存机制
+    - 保留规则引擎（正则表达式）用于快速处理简单问题
     """
     
-    # 知识库相关关键词
-    KNOWLEDGE_KEYWORDS = [
-        # 产品相关
-        "产品", "功能", "特性", "版本", "更新", "发布",
-        # 技术相关
-        "API", "接口", "文档", "SDK", "开发", "集成",
-        # 业务相关
-        "规则", "流程", "政策", "协议", "条款", "规定",
-        # 帮助相关
-        "如何", "怎么", "怎样", "操作", "使用", "教程",
-        # 问题相关
-        "问题", "错误", "故障", "异常", "报错", "解决"
-    ]
-    
-    # 数据库查询关键词
-    DATABASE_KEYWORDS = [
-        # 数据查询
-        "数据", "数据库", "查询", "统计", "报表", "分析",
-        # 业务数据
-        "订单", "用户", "客户", "商品", "库存", "销售",
-        "交易", "账单", "流水", "记录",
-        # 数量统计
-        "数量", "总数", "多少", "几个", "统计",
-        # 时间范围
-        "最近", "本周", "本月", "今天", "昨天",
-        # 条件查询
-        "超过", "大于", "小于", "等于", "包含"
-    ]
-    
-    # 新闻查询关键词（独立业务场景）
-    NEWS_KEYWORDS = [
-        # 新闻相关
-        "新闻", "消息", "资讯", "报道", "文章",
-        # 热门相关
-        "热门", "头条", "焦点", "排行",
-        # 作者相关
-        "作者", "来源", "报社", "媒体",
-        # 内容相关
-        "标题", "内容", "简介", "浏览量"
-    ]
-    
-    # 通用问题关键词（不需要检索）
-    GENERAL_KEYWORDS = [
-        "你好", "您好", "早上好", "晚上好",
-        "谢谢", "感谢", "再见",
-        "天气", "时间", "日期",
-        "计算", "算数", "数学"
-    ]
-    
-    # 正则规则（优化版）
+    # 正则规则（用于快速处理简单问题）
     PATTERNS = {
         # 数学运算（支持中文前缀和后缀）
         "math": r'^(计算|算一下|帮我算)?[\s]*[\d\s\+\-\*\/\(\)\.]+[\s]*(等于几|等于多少|是多少)?$',
@@ -91,8 +39,6 @@ class SmartRouter:
         "greeting": r'^(你好|您好|hi|hello|hey)[\s,，。！!]*(.*)?$',
         # 感谢
         "thanks": r'(谢谢|感谢|thank|多谢)',
-        # 天气查询
-        "weather": r'(.*)天气(怎么样|如何|怎样)',
         # 时间查询
         "time": r'(现在|今天|当前)?(几点|几点钟|什么时间)',
         # 日期查询
@@ -100,12 +46,15 @@ class SmartRouter:
     }
     
     def __init__(self):
-        self.llm_cache = {}  # LLM 决策缓存
+        self.llm = get_llm()
+        self.cache = {}  # 路由决策缓存
         self.stats = {
-            "keyword_hits": 0,
+            "total_requests": 0,
             "pattern_hits": 0,
-            "llm_hits": 0,
-            "cache_hits": 0
+            "cache_hits": 0,
+            "llm_calls": 0,
+            "tool_calls": 0,
+            "no_tool_calls": 0
         }
     
     async def route(self, query: str) -> Dict[str, Any]:
@@ -113,28 +62,23 @@ class SmartRouter:
         
         Args:
             query: 用户问题
-            
+        
         Returns:
             {
-                "needs_retrieval": bool,
-                "method": str,  # keyword, pattern, llm, cache
-                "reason": str,
-                "confidence": float,
-                "latency_ms": int
+                "needs_retrieval": bool,  # 是否需要检索知识库
+                "needs_tool": bool,  # 是否需要调用工具
+                "tool_name": str,  # 工具名称
+                "tool_args": dict,  # 工具参数
+                "reason": str,  # 决策原因
+                "confidence": float,  # 置信度
+                "method": str,  # 决策方法（pattern/cache/llm）
+                "latency_ms": int  # 响应时间
             }
         """
-        import time
         start_time = time.time()
+        self.stats["total_requests"] += 1
         
-        # 1. 尝试关键词快速路径
-        result = self._keyword_route(query)
-        if result:
-            self.stats["keyword_hits"] += 1
-            result["latency_ms"] = int((time.time() - start_time) * 1000)
-            logger.info(f"Route by keyword: {result}")
-            return result
-        
-        # 2. 尝试规则引擎匹配
+        # 1. 尝试规则引擎匹配（毫秒级，用于简单问题）
         result = self._pattern_route(query)
         if result:
             self.stats["pattern_hits"] += 1
@@ -142,116 +86,48 @@ class SmartRouter:
             logger.info(f"Route by pattern: {result}")
             return result
         
-        # 3. 尝试内存缓存
-        cache_key = self._get_cache_key(query)
-        if cache_key in self.llm_cache:
+        # 2. 检查缓存
+        cache_key = query.strip().lower()
+        if cache_key in self.cache:
             self.stats["cache_hits"] += 1
-            result = self.llm_cache[cache_key].copy()
+            result = self.cache[cache_key].copy()
             result["method"] = "cache"
             result["latency_ms"] = int((time.time() - start_time) * 1000)
             logger.info(f"Route by cache: {result}")
             return result
         
-        # 3.5 尝试 Redis 缓存
-        try:
-            from app.services.cache import CacheService
-            cached = await CacheService.get_route_decision(query)
-            if cached:
-                self.stats["cache_hits"] += 1
-                cached["method"] = "redis_cache"
-                cached["latency_ms"] = int((time.time() - start_time) * 1000)
-                logger.info(f"Route by redis cache: {cached}")
-                return cached
-        except Exception as e:
-            logger.warning(f"Redis cache check failed: {e}")
-        
-        # 4. LLM 智能决策（带降级）
-        try:
+        # 3. 使用LLM Function Calling决策
+        async with tracer.span("llm_route"):
             result = await self._llm_route(query)
-            self.stats["llm_hits"] += 1
-            
-            # 缓存结果（内存）
-            self.llm_cache[cache_key] = result.copy()
-            
-            # 缓存结果（Redis）
-            try:
-                from app.services.cache import CacheService
-                await CacheService.set_route_decision(query, result)
-            except Exception as e:
-                logger.warning(f"Redis cache set failed: {e}")
-            
-            result["latency_ms"] = int((time.time() - start_time) * 1000)
-            logger.info(f"Route by LLM: {result}")
-            return result
         
-        except Exception as e:
-            logger.error(f"LLM route failed: {e}")
-            # 降级策略：默认检索
-            result = {
-                "needs_retrieval": True,
-                "method": "fallback",
-                "reason": f"LLM 路由失败，降级为默认检索: {str(e)}",
-                "confidence": 0.5,
-                "latency_ms": int((time.time() - start_time) * 1000)
-            }
-            return result
-    
-    def _keyword_route(self, query: str) -> Optional[Dict[str, Any]]:
-        """关键词快速路由（毫秒级）"""
-        # 1. 检查新闻查询关键词（优先级最高）
-        for keyword in self.NEWS_KEYWORDS:
-            if keyword in query:
-                return {
-                    "needs_retrieval": False,  # 不需要向量检索
-                    "needs_tool": True,  # 需要调用工具
-                    "tool_name": "news_query",
-                    "method": "keyword",
-                    "reason": f"包含新闻查询关键词: {keyword}",
-                    "confidence": 0.95
-                }
+        # 4. 缓存结果
+        self.cache[cache_key] = result.copy()
         
-        # 2. 检查数据库查询关键词
-        for keyword in self.DATABASE_KEYWORDS:
-            if keyword in query:
-                return {
-                    "needs_retrieval": False,  # 不需要向量检索
-                    "needs_tool": True,  # 需要调用工具
-                    "tool_name": "mysql_query",
-                    "method": "keyword",
-                    "reason": f"包含数据库查询关键词: {keyword}",
-                    "confidence": 0.95
-                }
+        # 5. 更新统计
+        if result.get("needs_tool"):
+            self.stats["tool_calls"] += 1
+        else:
+            self.stats["no_tool_calls"] += 1
         
-        # 3. 检查是否包含知识库关键词
-        for keyword in self.KNOWLEDGE_KEYWORDS:
-            if keyword in query:
-                return {
-                    "needs_retrieval": True,
-                    "method": "keyword",
-                    "reason": f"包含知识库关键词: {keyword}",
-                    "confidence": 0.9
-                }
+        result["latency_ms"] = int((time.time() - start_time) * 1000)
+        logger.info(f"Route by LLM: {result}")
         
-        # 4. 检查是否是通用问题
-        for keyword in self.GENERAL_KEYWORDS:
-            if keyword in query:
-                return {
-                    "needs_retrieval": False,
-                    "method": "keyword",
-                    "reason": f"通用问题关键词: {keyword}",
-                    "confidence": 0.95
-                }
-        
-        return None
+        return result
     
     def _pattern_route(self, query: str) -> Optional[Dict[str, Any]]:
-        """规则引擎匹配（毫秒级）- 优化版"""
+        """规则引擎匹配（毫秒级）
+        
+        用于快速处理简单问题（问候、感谢、时间查询等）
+        """
         query_stripped = query.strip()
         
         # 数学运算（支持中文前缀和后缀）
         if re.match(self.PATTERNS["math"], query_stripped):
             return {
                 "needs_retrieval": False,
+                "needs_tool": True,
+                "tool_name": "calculator",
+                "tool_args": {"expression": query_stripped},
                 "method": "pattern",
                 "reason": "数学运算表达式",
                 "confidence": 1.0
@@ -261,6 +137,9 @@ class SmartRouter:
         if re.match(self.PATTERNS["greeting"], query_stripped, re.IGNORECASE):
             return {
                 "needs_retrieval": False,
+                "needs_tool": False,
+                "tool_name": None,
+                "tool_args": {},
                 "method": "pattern",
                 "reason": "问候语",
                 "confidence": 1.0
@@ -270,17 +149,11 @@ class SmartRouter:
         if re.search(self.PATTERNS["thanks"], query_stripped, re.IGNORECASE):
             return {
                 "needs_retrieval": False,
+                "needs_tool": False,
+                "tool_name": None,
+                "tool_args": {},
                 "method": "pattern",
                 "reason": "感谢语",
-                "confidence": 1.0
-            }
-        
-        # 天气查询
-        if re.search(self.PATTERNS["weather"], query_stripped):
-            return {
-                "needs_retrieval": False,
-                "method": "pattern",
-                "reason": "天气查询",
                 "confidence": 1.0
             }
         
@@ -288,6 +161,9 @@ class SmartRouter:
         if re.search(self.PATTERNS["time"], query_stripped):
             return {
                 "needs_retrieval": False,
+                "needs_tool": False,
+                "tool_name": None,
+                "tool_args": {},
                 "method": "pattern",
                 "reason": "时间查询",
                 "confidence": 1.0
@@ -297,6 +173,9 @@ class SmartRouter:
         if re.search(self.PATTERNS["date"], query_stripped):
             return {
                 "needs_retrieval": False,
+                "needs_tool": False,
+                "tool_name": None,
+                "tool_args": {},
                 "method": "pattern",
                 "reason": "日期查询",
                 "confidence": 1.0
@@ -305,69 +184,169 @@ class SmartRouter:
         return None
     
     async def _llm_route(self, query: str) -> Dict[str, Any]:
-        """LLM 智能决策（带缓存）"""
-        # 获取 LLM
-        llm = get_llm(settings.DEFAULT_MODEL)
+        """使用LLM Function Calling决策
         
-        # 构建路由决策提示词
-        route_prompt = PromptTemplates.get_agent_prompt(
-            task=query,
-            agent_type="route_decision"
-        )
+        Args:
+            query: 用户问题
         
-        # 调用 LLM
-        response = await llm.ainvoke([HumanMessage(content=route_prompt)])
+        Returns:
+            路由决策结果
+        """
+        self.stats["llm_calls"] += 1
         
-        # 解析 JSON 响应
-        response_text = response.content.strip()
+        # 构建提示词
+        prompt = self._build_route_prompt(query)
         
-        # 提取 JSON
-        if "```json" in response_text:
-            json_str = response_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in response_text:
-            json_str = response_text.split("```")[1].split("```")[0].strip()
-        else:
-            json_str = response_text
+        try:
+            # 调用LLM
+            response = await self.llm.ainvoke(prompt)
+            
+            # 解析LLM响应
+            result = self._parse_llm_response(response.content, query)
+            
+            return result
         
-        decision = json.loads(json_str)
-        
-        return {
-            "needs_retrieval": decision.get("needs_retrieval", False),
-            "method": "llm",
-            "reason": decision.get("reason", ""),
-            "confidence": decision.get("confidence", 0.5)
-        }
+        except Exception as e:
+            logger.error(f"LLM route failed: {e}")
+            
+            # 降级策略：默认不调用工具
+            return {
+                "needs_retrieval": False,
+                "needs_tool": False,
+                "tool_name": None,
+                "tool_args": {},
+                "reason": f"LLM路由失败，降级为不调用工具: {str(e)}",
+                "confidence": 0.5,
+                "method": "fallback"
+            }
     
-    def _get_cache_key(self, query: str) -> str:
-        """生成缓存键"""
-        return hashlib.md5(query.encode()).hexdigest()
+    def _build_route_prompt(self, query: str) -> str:
+        """构建路由决策提示词
+        
+        Args:
+            query: 用户问题
+        
+        Returns:
+            提示词文本
+        """
+        tools_description = tool_registry.get_tools_description()
+        
+        # 使用简单的字符串拼接，避免格式化错误
+        prompt = """你是一个智能路由决策器，需要判断用户问题是否需要调用工具。
+
+用户问题：""" + query + """
+
+可用工具列表：
+""" + tools_description + """
+
+请分析用户问题，判断：
+1. 是否需要调用工具？
+2. 如果需要，调用哪个工具？
+3. 工具参数是什么？
+
+请以JSON格式返回决策结果：
+{
+    "needs_tool": true或false,
+    "tool_name": "工具名称（如果需要调用工具）",
+    "tool_args": {"参数名": "参数值"},
+    "reason": "决策原因",
+    "confidence": 0.0到1.0之间的数字
+}
+
+注意：
+- 如果用户问题涉及天气、新闻、数据库查询等，应该调用对应的工具
+- 如果用户问题是问候、闲聊、简单问题，不需要调用工具
+- confidence表示决策的置信度，范围0.0-1.0
+
+请只返回JSON，不要包含其他内容。"""
+        
+        return prompt
+    
+    def _parse_llm_response(self, response: str, query: str) -> Dict[str, Any]:
+        """解析LLM响应
+        
+        Args:
+            response: LLM响应文本
+            query: 用户问题
+        
+        Returns:
+            路由决策结果
+        """
+        try:
+            # 尝试提取JSON
+            json_str = response.strip()
+            
+            # 移除可能的markdown标记
+            if json_str.startswith("```json"):
+                json_str = json_str[7:]
+            if json_str.startswith("```"):
+                json_str = json_str[3:]
+            if json_str.endswith("```"):
+                json_str = json_str[:-3]
+            
+            json_str = json_str.strip()
+            
+            # 解析JSON
+            data = json.loads(json_str)
+            
+            # 构建结果
+            result = {
+                "needs_retrieval": False,  # 工具调用优先于知识库检索
+                "needs_tool": data.get("needs_tool", False),
+                "tool_name": data.get("tool_name"),
+                "tool_args": data.get("tool_args", {}),
+                "reason": data.get("reason", "LLM决策"),
+                "confidence": data.get("confidence", 0.8),
+                "method": "llm"
+            }
+            
+            # 验证工具是否存在
+            if result["needs_tool"] and result["tool_name"]:
+                tool = tool_registry.get_tool(result["tool_name"])
+                if not tool:
+                    logger.warning(f"LLM决策的工具不存在: {result['tool_name']}")
+                    result["needs_tool"] = False
+                    result["tool_name"] = None
+                    result["reason"] = f"工具不存在: {result['tool_name']}"
+            
+            return result
+        
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON解析失败: {e}, response: {response[:200]}")
+            
+            # 降级策略：不调用工具
+            return {
+                "needs_retrieval": False,
+                "needs_tool": False,
+                "tool_name": None,
+                "tool_args": {},
+                "reason": f"JSON解析失败: {str(e)}",
+                "confidence": 0.5,
+                "method": "fallback"
+            }
     
     def get_stats(self) -> Dict[str, Any]:
-        """获取路由统计"""
-        total = (
-            self.stats["keyword_hits"] +
-            self.stats["pattern_hits"] +
-            self.stats["llm_hits"] +
-            self.stats["cache_hits"]
-        )
+        """获取路由统计
         
+        Returns:
+            统计数据
+        """
         return {
-            "total_requests": total,
-            "keyword_hits": self.stats["keyword_hits"],
+            "total_requests": self.stats["total_requests"],
             "pattern_hits": self.stats["pattern_hits"],
-            "llm_hits": self.stats["llm_hits"],
             "cache_hits": self.stats["cache_hits"],
-            "keyword_rate": self.stats["keyword_hits"] / total if total > 0 else 0,
-            "pattern_rate": self.stats["pattern_hits"] / total if total > 0 else 0,
-            "llm_rate": self.stats["llm_hits"] / total if total > 0 else 0,
-            "cache_rate": self.stats["cache_hits"] / total if total > 0 else 0,
-            "cache_size": len(self.llm_cache)
+            "llm_calls": self.stats["llm_calls"],
+            "tool_calls": self.stats["tool_calls"],
+            "no_tool_calls": self.stats["no_tool_calls"],
+            "pattern_rate": self.stats["pattern_hits"] / max(self.stats["total_requests"], 1),
+            "cache_rate": self.stats["cache_hits"] / max(self.stats["total_requests"], 1),
+            "tool_rate": self.stats["tool_calls"] / max(self.stats["total_requests"], 1)
         }
     
     def clear_cache(self):
         """清空缓存"""
-        self.llm_cache.clear()
-        logger.info("Router cache cleared")
+        self.cache.clear()
+        logger.info("路由缓存已清空")
 
 
 # 全局路由器实例

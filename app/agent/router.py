@@ -2,6 +2,9 @@
 from typing import Literal
 from app.agent.state import AgentState, ChatState
 from app.agent.nodes import should_continue
+from app.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def route_agent(state: AgentState) -> Literal["tools", "end", "error"]:
@@ -55,10 +58,16 @@ def route_chat(state: ChatState) -> Literal["retrieve", "chat"]:
     """
     route_decision = state.get("route_decision", {})
     needs_retrieval = route_decision.get("needs_retrieval", False)
+    needs_tool = route_decision.get("needs_tool", False)
+    
+    # 添加日志
+    logger.info(f"route_chat called: needs_retrieval={needs_retrieval}, needs_tool={needs_tool}")
     
     if needs_retrieval:
+        logger.info("route_chat returning: retrieve")
         return "retrieve"
     else:
+        logger.info("route_chat returning: chat (will enter tool_decision)")
         return "chat"
 
 

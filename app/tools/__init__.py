@@ -1,54 +1,81 @@
-"""工具模块"""
-from .registry import ToolRegistry, get_registry, register_tool
-from .knowledge import knowledge_search, RAG_TOOL_DEFINITION
-from .mysql_query import mysql_query_tool, MYSQL_TOOL_DEFINITION
-from .news_query import news_query_tool, smart_news_query, NEWS_TOOL_DEFINITION
+"""工具模块 - 生产标准实现
+
+统一管理所有工具的注册和导出
+
+生产标准：
+- 统一注册入口（避免重复注册）
+- 模块化导入
+- 清晰的导出列表
+"""
+from .registry import ToolRegistry, get_registry, register_tool, ToolConfig
 from langchain_core.tools import StructuredTool
 
 __all__ = [
-    "ToolRegistry", "get_registry", "register_tool",
-    "knowledge_search", "RAG_TOOL_DEFINITION",
-    "mysql_query_tool", "MYSQL_TOOL_DEFINITION",
-    "news_query_tool", "smart_news_query", "NEWS_TOOL_DEFINITION"
+    # 注册中心
+    "ToolRegistry", 
+    "get_registry", 
+    "register_tool",
+    "ToolConfig",
+    
+    # 工具定义（用于智能路由）
+    "RAG_TOOL_DEFINITION",
+    "MYSQL_TOOL_DEFINITION",
+    "NEWS_TOOL_DEFINITION",
+    
+    # 工具函数
+    "knowledge_search",
+    "smart_news_query",
 ]
 
 
-# 注册RAG工具
-def register_rag_tool():
-    """注册RAG检索工具"""
-    from pydantic import BaseModel, Field
-    
-    class RAGSearchArgs(BaseModel):
-        """RAG检索参数"""
-        query: str = Field(description="查询问题或关键词")
-        top_k: int = Field(default=5, description="返回结果数量")
-        threshold: float = Field(default=0.5, description="相似度阈值")
-    
-    tool = StructuredTool(
-        name="knowledge_search",
-        coroutine=knowledge_search,  # 异步函数
-        description="从知识库中检索相关文档内容。当用户询问产品信息、技术文档、业务规则等知识性问题时使用此工具。",
-        args_schema=RAGSearchArgs
-    )
-    
-    get_registry().register(tool)
+# ============================================
+# 工具定义导入
+# ============================================
+
+from .knowledge import RAG_TOOL_DEFINITION, knowledge_search, knowledge_tool
+from .mysql_query import MYSQL_TOOL_DEFINITION, mysql_query_tool
+from .news_query import NEWS_TOOL_DEFINITION, smart_news_query, news_query_tool
 
 
-# 注册其他工具
+# ============================================
+# 统一注册入口
+# ============================================
+
 def register_all_tools():
-    """注册所有工具"""
-    # 导入并注册其他工具（它们会在导入时自动注册）
-    from .search import search_tool
+    """注册所有工具（统一入口）
+    
+    生产标准：
+    - 统一注册入口
+    - 避免重复注册
+    - 清晰的注册顺序
+    
+    注册的工具：
+    1. calculator - 数学计算器
+    2. web_search - 网络搜索
+    3. get_weather - 天气查询
+    4. mysql_query - 数据库查询
+    5. news_query - 新闻查询
+    6. knowledge_search - 知识库检索
+    """
+    # 导入工具模块（触发自动注册）
     from .calculator import calculator_tool
+    from .search import search_tool
     from .weather import weather_tool
-    from .mysql_query import create_mysql_tool
-    from .news_query import create_news_tool
+    from .mysql_query import mysql_query_tool
+    from .news_query import news_query_tool
     
-    # 注册RAG工具
-    register_rag_tool()
+    # 注册 RAG 工具（手动注册，避免重复）
+    from .knowledge import knowledge_tool
+    knowledge_tool()
     
-    print("所有工具已注册完成")
+    # 打印注册信息
+    registry = get_registry()
+    tool_names = registry.get_tool_names()
+    print(f"所有工具已注册完成: {tool_names}")
 
 
+# ============================================
 # 启动时注册
+# ============================================
+
 register_all_tools()

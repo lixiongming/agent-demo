@@ -297,8 +297,7 @@ async def chat_node(state: ChatState) -> Dict[str, Any]:
             
             # 如果有检索结果，添加到上下文
             if rag_context and rag_used:
-                context_parts.append(f"""知识库检索结果：
-{rag_context}""")
+                context_parts.append(f"""知识库检索结果：{rag_context}""")
                 logger.info("Using RAG context for response")
             
             # 如果有工具执行结果，添加到上下文
@@ -306,7 +305,29 @@ async def chat_node(state: ChatState) -> Dict[str, Any]:
                 tool_info = []
                 for result in tool_results:
                     if result.get("success"):
-                        tool_info.append(f"- {result['tool_name']}: {result['result']}")
+                        tool_name = result['tool_name']
+                        tool_result = result['result']
+                        
+                        # 特殊处理新闻查询结果
+                        if tool_name == "news_query" and tool_result:
+                            news_list = tool_result.get('news_list', [])
+                            if news_list:
+                                news_info = []
+                                news_info.append(f"查询类型: {tool_result.get('result_type', '新闻')}")
+                                news_info.append(f"新闻数量: {tool_result.get('news_count', 0)}")
+                                news_info.append("\n新闻列表:")
+                                for i, news in enumerate(news_list[:10], 1):  # 最多显示10条
+                                    title = news.get('title', '无标题')
+                                    views = news.get('views', 0)
+                                    author = news.get('author', '未知')
+                                    news_info.append(f"{i}. {title} (作者: {author}, 浏览量: {views})")
+                                
+                                tool_info.append(f"- {tool_name}:\n{chr(10).join(news_info)}")
+                            else:
+                                tool_info.append(f"- {tool_name}: 没有找到相关新闻")
+                        else:
+                            # 其他工具，直接显示结果
+                            tool_info.append(f"- {tool_name}: {tool_result}")
                     else:
                         tool_info.append(f"- {result['tool_name']}: 执行失败 - {result.get('error')}")
                 

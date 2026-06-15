@@ -97,6 +97,18 @@ class Settings(BaseSettings):
     MEMORY_SHORT_TERM_TTL: int = 3600  # 1小时
     MEMORY_LONG_TERM_LIMIT: int = 1000
     
+    # ============================================
+    # 天气 API 配置（和风天气）
+    # ============================================
+    QWEATHER_API_HOST: str = "https://devapi.qweather.com"  # API Host
+    QWEATHER_API_TOKEN: str = ""  # API Token
+    QWEATHER_DEFAULT_LOCATION: str = "101010100"  # 默认城市代码（北京）
+    
+    # ============================================
+    # 搜索 API 配置（Tavily）
+    # ============================================
+    TAVILY_API_KEY: str = ""  # Tavily API Key（网络搜索）
+    
     # 日志配置
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/app.log"

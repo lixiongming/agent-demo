@@ -204,28 +204,26 @@ async def smart_news_query(question: str) -> Dict[str, Any]:
     prompt = f"""你是一个新闻查询助手，需要根据用户问题判断查询类型。
 
 可用查询类型：
+- hot: 热门新闻（浏览量排序，不限制时间范围，返回所有热门新闻）
+- recent: 最近新闻（时间排序，返回最新新闻）
 - search: 搜索新闻（关键词搜索）
-- hot: 热门新闻（浏览量排序）
-- recent: 最近新闻（时间排序）
 - author: 作者新闻（按作者查询）
 - stats: 新闻统计（统计数据）
-- today: 今天新闻
-- week: 本周新闻
-- month: 本月新闻
+- today: 今天新闻（只返回今天的新闻）
+- week: 本周新闻（只返回本周的新闻）
+- month: 本月新闻（只返回本月的新闻）
 
 用户问题：{question}
 
-请分析用户问题，判断应该使用哪种查询类型，并提取相关参数。
+请分析用户问题，判断应该使用哪种查询类型。
+
+重要规则：
+1. 如果用户问题包含"热门"、"最热"、"热门新闻"等关键词，必须判断为 hot 类型
+2. hot 类型不设置时间范围（days参数），返回所有热门新闻
+3. 只有用户明确提到"今天"、"本周"、"本月"等时间词时，才使用 today/week/month 类型
 
 请以JSON格式返回：
-{
-    "query_type": "查询类型",
-    "keyword": "搜索关键词（如果query_type是search）",
-    "author": "作者名称（如果query_type是author）",
-    "limit": 返回数量（默认10）,
-    "days": 时间范围天数（可选）,
-    "reason": "判断原因"
-}
+{{"query_type": "查询类型", "reason": "判断原因"}}
 
 只返回JSON，不要其他内容。"""
 
@@ -269,9 +267,19 @@ async def smart_news_query(question: str) -> Dict[str, Any]:
 
 def create_news_tool():
     """创建新闻查询工具"""
-    tool = Tool(
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel, Field
+    
+    # 定义参数 schema
+    class NewsQueryArgs(BaseModel):
+        """新闻查询参数"""
+        question: str = Field(description="用户问题（自动解析查询类型）")
+    
+    # 使用 StructuredTool 正确处理异步函数
+    tool = StructuredTool(
         name="news_query",
-        func=lambda q_type, kw=None, auth=None, lim=10, d=None: news_query_tool(q_type, kw, auth, lim, d),
+        coroutine=smart_news_query,  # 异步函数
+        args_schema=NewsQueryArgs,  # 参数 schema
         description="""新闻查询工具。
 
 功能：
@@ -290,17 +298,13 @@ def create_news_tool():
 - 统计新闻数据
 
 输入参数：
-- query_type: 查询类型（search, hot, recent, author, stats, today, week, month）
-- keyword: 搜索关键词（search 类型）
-- author: 作者名称（author 类型）
-- limit: 返回数量（默认10）
-- days: 时间范围天数（可选）
+- question: 用户问题（自动解析查询类型）
 
 示例：
-- "搜索关于科技的新闻" → query_type=search, keyword="科技"
-- "查看热门新闻" → query_type=hot
-- "最近一周的新闻" → query_type=week
-- "新华社的新闻" → query_type=author, author="新华社"
+- "热门的新闻" → 自动识别为热门查询
+- "搜索关于科技的新闻" → 自动识别为关键词搜索
+- "最近一周的新闻" → 自动识别为时间范围查询
+- "新华社的新闻" → 自动识别为作者查询
 """
     )
     

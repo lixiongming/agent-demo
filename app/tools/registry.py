@@ -312,26 +312,30 @@ class ToolRegistry:
                 try:
                     logger.info(f"Executing tool: {name} (attempt {attempt + 1}/{max_retries + 1})")
                     
-                    # 获取工具函数
-                    func = tool.func
+                    # 获取工具函数（支持 StructuredTool）
+                    # StructuredTool 使用 coroutine 属性，普通 Tool 使用 func 属性
+                    if hasattr(tool, 'coroutine') and tool.coroutine:
+                        func = tool.coroutine
+                    elif hasattr(tool, 'func') and tool.func:
+                        func = tool.func
+                    else:
+                        raise ToolException(f"Tool function not callable: {name}", name)
+                    
                     if not hasattr(func, "__call__"):
                         raise ToolException(f"Tool function not callable: {name}", name)
                     
                     # 执行工具（带超时）
-                    if asyncio.iscoroutinefunction(func):
+                    # 调用函数获取结果
+                    call_result = func(**args) if args else func()
+                    
+                    # 如果结果是 coroutine，等待它
+                    if asyncio.iscoroutine(call_result):
                         result = await asyncio.wait_for(
-                            func(**args) if args else await func(),
+                            call_result,
                             timeout=exec_timeout
                         )
                     else:
-                        # 同步函数在线程池中执行
-                        result = await asyncio.wait_for(
-                            asyncio.get_event_loop().run_in_executor(
-                                None,
-                                lambda: func(**args) if args else func()
-                            ),
-                            timeout=exec_timeout
-                        )
+                        result = call_result
                     
                     # 记录成功
                     latency_ms = (time.time() - start_time) * 1000
