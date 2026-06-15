@@ -5,12 +5,15 @@
 - RAG查询接口
 - 文档管理接口
 - 统计信息接口
+- 限流保护
+- 熔断保护
+- 链路追踪
 
 API 文档：
 - 所有接口都有清晰的请求参数定义
 - 访问 http://localhost:8888/docs 查看 Swagger 文档
 """
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Body
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Body, Request
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Any, Optional
 import os
@@ -31,6 +34,9 @@ from app.services.rag import RAGService
 from app.core.logger import get_logger
 from app.core.container import DIContainer
 from app.core.interfaces import IRAGService
+from app.core.rate_limit import rate_limit, rag_breaker
+from app.core.tracing import tracer
+from app.core.error_codes import ErrorCode, APIError
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -39,7 +45,7 @@ router = APIRouter()
 def get_rag_service() -> RAGService:
     """获取RAG服务实例（容器单例）
     
-    生产标准：
+    标准：
     - 使用容器获取单例
     - 只初始化一次
     - 后续请求直接获取
@@ -73,36 +79,39 @@ def get_rag_service() -> RAGService:
 ```
 """
 )
+@rate_limit(key="rag_ingest_text", limit=100, period=60)  # 每分钟 100 次
 async def ingest_text(request: IngestTextRequest = Body(...)):
-    """文本入库接口
-    
-    Args:
-        request: 入库请求参数
+    """文本入库接口"""
+    async with tracer.span("rag_ingest_text"):
+        service = get_rag_service()
         
-    Returns:
-        入库结果，包含文档ID
-    """
-    service = get_rag_service()
-    
-    try:
-        doc_id = await service.ingest_text(
-            content=request.content,
-            source=request.source,
-            metadata=request.metadata
-        )
-        
-        return SuccessResponse(
-            message="文本入库成功",
-            data={
-                "doc_id": doc_id,
-                "content_length": len(request.content),
-                "source": request.source
-            }
-        )
-        
-    except Exception as e:
-        logger.error(f"文本入库失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        try:
+            # 熔断保护
+            with rag_breaker:
+                doc_id = await service.ingest_text(
+                    content=request.content,
+                    source=request.source,
+                    metadata=request.metadata
+                )
+            
+            return SuccessResponse(
+                message="文本入库成功",
+                data={
+                    "doc_id": doc_id,
+                    "content_length": len(request.content),
+                    "source": request.source
+                }
+            )
+            
+        except APIError:
+            raise
+        except Exception as e:
+            logger.error(f"文本入库失败: {e}")
+            raise APIError(
+                code=ErrorCode.RAG_UPLOAD_FAILED,
+                message="文本入库失败",
+                details={"error": str(e)}
+            )
 
 
 @router.post(
@@ -130,56 +139,57 @@ curl -X POST "http://localhost:8888/api/v1/rag/ingest/file" \
 ```
 """
 )
+@rate_limit(key="rag_ingest_file", limit=20, period=60)  # 每分钟 20 次
 async def ingest_file(
     file: UploadFile = File(..., description="要上传的文件"),
     metadata: str = Form(default="{}", description="元数据 JSON 字符串")
 ):
-    """文件入库接口
-    
-    Args:
-        file: 上传的文件
-        metadata: 元数据JSON字符串
+    """文件入库接口 - 大厂标准实现"""
+    async with tracer.span("rag_ingest_file"):
+        service = get_rag_service()
         
-    Returns:
-        入库结果
-    """
-    service = get_rag_service()
-    
-    # 保存临时文件
-    temp_dir = tempfile.mkdtemp()
-    temp_file = os.path.join(temp_dir, file.filename)
-    
-    try:
-        # 写入文件
-        with open(temp_file, "wb") as f:
-            content = await file.read()
-            f.write(content)
+        # 保存临时文件
+        temp_dir = tempfile.mkdtemp()
+        temp_file = os.path.join(temp_dir, file.filename)
         
-        # 解析元数据
         try:
-            meta_dict = json.loads(metadata)
-        except json.JSONDecodeError:
-            meta_dict = {}
-        
-        # 入库
-        result = await service.ingest_document(temp_file, metadata=meta_dict)
-        
-        return SuccessResponse(
-            message="文件入库成功",
-            data={
-                "file_name": file.filename,
-                "total_chunks": result["total_chunks"],
-                "stored_ids": result["stored_ids"]
-            }
-        )
-        
-    except Exception as e:
-        logger.error(f"文件入库失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-        
-    finally:
-        # 清理临时文件
-        shutil.rmtree(temp_dir, ignore_errors=True)
+            # 写入文件
+            with open(temp_file, "wb") as f:
+                content = await file.read()
+                f.write(content)
+            
+            # 解析元数据
+            try:
+                meta_dict = json.loads(metadata)
+            except json.JSONDecodeError:
+                meta_dict = {}
+            
+            # 熔断保护
+            with rag_breaker:
+                result = await service.ingest_document(temp_file, metadata=meta_dict)
+            
+            return SuccessResponse(
+                message="文件入库成功",
+                data={
+                    "file_name": file.filename,
+                    "total_chunks": result["total_chunks"],
+                    "stored_ids": result["stored_ids"]
+                }
+            )
+            
+        except APIError:
+            raise
+        except Exception as e:
+            logger.error(f"文件入库失败: {e}")
+            raise APIError(
+                code=ErrorCode.RAG_UPLOAD_FAILED,
+                message="文件入库失败",
+                details={"error": str(e)}
+            )
+            
+        finally:
+            # 清理临时文件
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @router.post(
@@ -204,37 +214,40 @@ async def ingest_file(
 ```
 """
 )
+@rate_limit(key="rag_ingest_directory", limit=5, period=60)  # 每分钟 5 次
 async def ingest_directory(request: IngestDirectoryRequest = Body(...)):
-    """批量入库目录
-    
-    Args:
-        request: 目录入库请求参数
+    """批量入库目录"""
+    async with tracer.span("rag_ingest_directory"):
+        service = get_rag_service()
         
-    Returns:
-        入库结果
-    """
-    service = get_rag_service()
-    
-    try:
-        result = await service.ingest_directory(
-            directory=request.directory,
-            file_types=request.file_types,
-            metadata=request.metadata
-        )
-        
-        return SuccessResponse(
-            message="批量入库成功",
-            data={
-                "directory": request.directory,
-                "total_chunks": result["total_chunks"],
-                "stored_ids": result["stored_ids"],
-                "status": result["status"]
-            }
-        )
-        
-    except Exception as e:
-        logger.error(f"批量入库失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        try:
+            # 熔断保护
+            with rag_breaker:
+                result = await service.ingest_directory(
+                    directory=request.directory,
+                    file_types=request.file_types,
+                    metadata=request.metadata
+                )
+            
+            return SuccessResponse(
+                message="批量入库成功",
+                data={
+                    "directory": request.directory,
+                    "total_chunks": result["total_chunks"],
+                    "stored_ids": result["stored_ids"],
+                    "status": result["status"]
+                }
+            )
+            
+        except APIError:
+            raise
+        except Exception as e:
+            logger.error(f"批量入库失败: {e}")
+            raise APIError(
+                code=ErrorCode.RAG_UPLOAD_FAILED,
+                message="批量入库失败",
+                details={"error": str(e)}
+            )
 
 
 # ============================================
@@ -270,34 +283,37 @@ async def ingest_directory(request: IngestDirectoryRequest = Body(...)):
 ```
 """
 )
+@rate_limit(key="rag_query", limit=200, period=60)  # 每分钟 200 次
 async def rag_query(request: RAGQueryRequest = Body(...)):
-    """RAG查询接口
-    
-    Args:
-        request: 查询请求参数
+    """RAG查询接口"""
+    async with tracer.span("rag_query"):
+        service = get_rag_service()
         
-    Returns:
-        查询结果，包含相关文档和上下文
-    """
-    service = get_rag_service()
-    
-    try:
-        result = await service.query(
-            question=request.question,
-            top_k=request.top_k,
-            threshold=request.threshold,
-            doc_type=request.doc_type,
-            hybrid=request.hybrid
-        )
-        
-        return SuccessResponse(
-            message="查询成功",
-            data=result
-        )
-        
-    except Exception as e:
-        logger.error(f"查询失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        try:
+            # 熔断保护
+            with rag_breaker:
+                result = await service.query(
+                    question=request.question,
+                    top_k=request.top_k,
+                    threshold=request.threshold,
+                    doc_type=request.doc_type,
+                    hybrid=request.hybrid
+                )
+            
+            return SuccessResponse(
+                message="查询成功",
+                data=result
+            )
+            
+        except APIError:
+            raise
+        except Exception as e:
+            logger.error(f"查询失败: {e}")
+            raise APIError(
+                code=ErrorCode.RAG_SEARCH_FAILED,
+                message="RAG 查询失败",
+                details={"error": str(e)}
+            )
 
 
 @router.post(
@@ -320,35 +336,38 @@ async def rag_query(request: RAGQueryRequest = Body(...)):
 ```
 """
 )
+@rate_limit(key="rag_query_advanced", limit=200, period=60)  # 每分钟 200 次
 async def rag_query_advanced(request: RAGQueryWithFiltersRequest = Body(...)):
-    """高级RAG查询接口
-    
-    Args:
-        request: 高级查询请求参数
+    """高级RAG查询接口 - 大厂标准实现"""
+    async with tracer.span("rag_query_advanced"):
+        service = get_rag_service()
         
-    Returns:
-        查询结果
-    """
-    service = get_rag_service()
-    
-    try:
-        result = await service.query(
-            question=request.question,
-            top_k=request.top_k,
-            threshold=request.threshold,
-            doc_type=request.doc_type,
-            filters=request.filters,
-            hybrid=request.hybrid
-        )
-        
-        return SuccessResponse(
-            message="查询成功",
-            data=result
-        )
-        
-    except Exception as e:
-        logger.error(f"查询失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        try:
+            # 熔断保护
+            with rag_breaker:
+                result = await service.query(
+                    question=request.question,
+                    top_k=request.top_k,
+                    threshold=request.threshold,
+                    doc_type=request.doc_type,
+                    filters=request.filters,
+                    hybrid=request.hybrid
+                )
+            
+            return SuccessResponse(
+                message="查询成功",
+                data=result
+            )
+            
+        except APIError:
+            raise
+        except Exception as e:
+            logger.error(f"查询失败: {e}")
+            raise APIError(
+                code=ErrorCode.RAG_SEARCH_FAILED,
+                message="RAG 查询失败",
+                details={"error": str(e)}
+            )
 
 
 # ============================================
@@ -366,31 +385,36 @@ async def rag_query_advanced(request: RAGQueryWithFiltersRequest = Body(...)):
 - `doc_id`: 文档ID（路径参数）
 """
 )
+@rate_limit(key="rag_delete", limit=50, period=60)  # 每分钟 50 次
 async def delete_document(doc_id: int):
-    """删除文档
-    
-    Args:
-        doc_id: 文档ID
+    """删除文档 - 大厂标准实现"""
+    async with tracer.span("rag_delete_document"):
+        service = get_rag_service()
         
-    Returns:
-        删除结果
-    """
-    service = get_rag_service()
-    
-    try:
-        success = await service.delete_document(doc_id)
-        
-        if success:
-            return SuccessResponse(
-                message="删除成功",
-                data={"doc_id": doc_id}
-            )
-        else:
-            raise HTTPException(status_code=404, detail="文档不存在")
+        try:
+            success = await service.delete_document(doc_id)
             
-    except Exception as e:
-        logger.error(f"删除失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            if success:
+                return SuccessResponse(
+                    message="删除成功",
+                    data={"doc_id": doc_id}
+                )
+            else:
+                raise APIError(
+                    code=ErrorCode.RAG_DOCUMENT_NOT_FOUND,
+                    message="文档不存在",
+                    details={"doc_id": doc_id}
+                )
+                
+        except APIError:
+            raise
+        except Exception as e:
+            logger.error(f"删除失败: {e}")
+            raise APIError(
+                code=ErrorCode.INTERNAL_ERROR,
+                message="删除文档失败",
+                details={"error": str(e)}
+            )
 
 
 @router.delete(
@@ -410,28 +434,29 @@ DELETE /api/v1/rag/source/old_document.pdf
 ```
 """
 )
+@rate_limit(key="rag_delete_source", limit=20, period=60)  # 每分钟 20 次
 async def delete_by_source(source: str):
-    """按来源删除文档
-    
-    Args:
-        source: 来源标识
+    """按来源删除文档"""
+    async with tracer.span("rag_delete_source"):
+        service = get_rag_service()
         
-    Returns:
-        删除结果
-    """
-    service = get_rag_service()
-    
-    try:
-        count = await service.delete_by_source(source)
-        
-        return SuccessResponse(
-            message=f"删除了 {count} 个文档",
-            data={"source": source, "deleted_count": count}
-        )
-        
-    except Exception as e:
-        logger.error(f"删除失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        try:
+            count = await service.delete_by_source(source)
+            
+            return SuccessResponse(
+                message=f"删除了 {count} 个文档",
+                data={"source": source, "deleted_count": count}
+            )
+            
+        except APIError:
+            raise
+        except Exception as e:
+            logger.error(f"删除失败: {e}")
+            raise APIError(
+                code=ErrorCode.INTERNAL_ERROR,
+                message="批量删除失败",
+                details={"error": str(e)}
+            )
 
 
 # ============================================
@@ -452,11 +477,7 @@ async def delete_by_source(source: str):
 """
 )
 async def get_stats():
-    """获取统计信息
-    
-    Returns:
-        统计信息
-    """
+    """获取统计信息"""
     service = get_rag_service()
     
     try:
@@ -469,7 +490,11 @@ async def get_stats():
         
     except Exception as e:
         logger.error(f"获取统计失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise APIError(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="获取统计信息失败",
+            details={"error": str(e)}
+        )
 
 
 @router.get(

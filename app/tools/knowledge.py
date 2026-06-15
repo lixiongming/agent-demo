@@ -3,10 +3,12 @@
 让Agent可以自主调用知识库检索
 """
 from typing import Dict, Any, Optional
+from langchain_core.tools import Tool
 from app.services.rag import RAGService
 from app.core.logger import get_logger
 from app.core.container import DIContainer
 from app.core.interfaces import IRAGService
+from app.tools.registry import register_tool, ToolConfig
 
 logger = get_logger(__name__)
 
@@ -91,6 +93,34 @@ async def knowledge_search(
             "error": str(e),
             "query": query
         }
+
+
+def knowledge_tool():
+    """创建知识库检索工具"""
+    tool = Tool(
+        name="knowledge_search",
+        func=lambda q, k=5, t=0.5: knowledge_search(q, k, t),
+        description="从知识库中检索相关文档内容。当用户询问产品信息、技术文档、业务规则等知识性问题时使用此工具。"
+    )
+    
+    # 配置：超时30秒，每分钟200次，失败10次熔断
+    config = ToolConfig(
+        name="knowledge_search",
+        description="知识库检索工具",
+        timeout=30,
+        rate_limit=200,
+        rate_period=60,
+        failure_threshold=10,
+        recovery_timeout=30,
+        max_retries=3
+    )
+    
+    register_tool(tool, config)
+    return tool
+
+
+# 自动注册
+knowledge_tool()
 
 
 # 工具定义（用于注册到ToolRegistry）

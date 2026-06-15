@@ -24,7 +24,6 @@ def get_perf_logger():
 class LoggingMiddleware(BaseHTTPMiddleware):
     """请求日志中间件 - 增强版
     
-    改进：
     - 请求ID追踪
     - 性能监控
     - 请求/响应记录
@@ -91,8 +90,13 @@ def setup_middlewares(app):
     # CORS
     app.add_middleware(
         CORSMiddleware,
+        # 只允许特定域名
+        # allow_origins=[
+        #     "https://your-domain.com",
+        #     "http://localhost:8888",  # 本地开发
+        # ],
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,  # 必须为 False 当 allow_origins=["*"]
         allow_methods=["*"],
         allow_headers=["*"],
     )

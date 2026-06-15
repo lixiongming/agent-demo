@@ -164,11 +164,11 @@ def setup_container(collection_name: str = "knowledge_base", use_memory: bool = 
         collection_name: Qdrant 集合名称
         use_memory: 是否使用内存模式（测试用）
     
-    改进：
+    
     - 使用插件化 Embedding 服务
     - 支持配置驱动的 Provider 切换
     - 无需重建容器即可切换模型
-    - 服务单例化（生产标准）
+    - 服务单例化
     """
     from app.core.interfaces import (
         IEmbeddingService, IVectorStore, ILLMService,

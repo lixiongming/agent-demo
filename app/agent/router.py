@@ -1,6 +1,6 @@
 """条件路由"""
 from typing import Literal
-from app.agent.state import AgentState
+from app.agent.state import AgentState, ChatState
 from app.agent.nodes import should_continue
 
 
@@ -46,3 +46,35 @@ def route_error(state: AgentState) -> Literal["agent", "end"]:
     
     # 尝试恢复
     return "agent"
+
+
+def route_chat(state: ChatState) -> Literal["retrieve", "chat"]:
+    """聊天路由
+    
+    根据路由决策决定是否检索知识库
+    """
+    route_decision = state.get("route_decision", {})
+    needs_retrieval = route_decision.get("needs_retrieval", False)
+    
+    if needs_retrieval:
+        return "retrieve"
+    else:
+        return "chat"
+
+
+def route_tool(state: ChatState) -> Literal["tool", "chat"]:
+    """工具路由
+    
+    根据工具决策决定是否调用工具
+    
+    - OpenAI: LLM 自主决策
+    - Google: 意图分类 + LLM 决策
+    - 阿里: 规则引擎 + LLM 决策
+    """
+    tool_decision = state.get("tool_decision", {})
+    needs_tool = tool_decision.get("needs_tool", False)
+    
+    if needs_tool:
+        return "tool"
+    else:
+        return "chat"

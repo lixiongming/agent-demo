@@ -25,6 +25,7 @@ langchain==1.3.4
 langchain-openai==1.2.2
 langgraph==1.2.4
 langchain-core==1.4.1
+tiktoken==0.9.0  # Token 精确计算
 
 # 向量嵌入 (使用智谱 AI API，无需本地模型)
 numpy==1.26.4                    # 必须小于 2.0，否则 torch 不兼容

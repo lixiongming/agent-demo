@@ -61,11 +61,27 @@ class Settings(BaseSettings):
     MAX_ITERATIONS: int = 10
     AGENT_TIMEOUT: int = 60
 
+    # 对话历史配置
+    HISTORY_ENABLED: bool = True  # 是否加载历史消息
+    HISTORY_MODE: str = "token"  # 模式: rounds(按轮数) / token(按token数)
+    HISTORY_ROUNDS_LIMIT: int = 10  # 轮数模式: 保留最近 N 轮对话（1轮=1问1答）
+    HISTORY_TOKEN_LIMIT: int = 16000  # Token模式: 历史消息最大 token 数（32K上下文，预留一半给输出）
+    HISTORY_TOKEN_SAFETY_MARGIN: int = 500  # Token 安全边界
+
     # Embedding 配置
     EMBEDDING_PROVIDER: str = "zhipu"  # 提供商: zhipu, openai, local
     EMBEDDING_MODEL_NAME: str = "embedding-3"  # 模型名称
     EMBEDDING_API_KEY: str = ""  # Embedding API Key（统一变量）
     EMBEDDING_DIM: int = 2048  # 向量维度（智谱 embedding-3 = 2048）
+
+    # 智谱 AI 配置
+    ZHIPU_API_KEY: str = ""  # 智谱 AI API Key（用于 Embedding 和 Rerank）
+
+    # Rerank 配置
+    RERANK_ENABLED: bool = True  # 是否启用 Rerank
+    RERANK_MODEL: str = "bge-reranker-v2-m3"  # Rerank 模型
+    RERANK_TOP_K: int = 20  # Rerank 召回数量
+    RERANK_FINAL_K: int = 5  # Rerank 最终返回数量
 
     # OpenAI Embedding 配置（可选）
     OPENAI_API_KEY: str = ""  # OpenAI API Key（已废弃，使用 EMBEDDING_API_KEY）

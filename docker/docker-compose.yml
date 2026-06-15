@@ -22,6 +22,12 @@ services:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - QDRANT_COLLECTION=knowledge_base
+      # 对话历史配置
+      - HISTORY_ENABLED=true       # 是否加载历史消息
+      - HISTORY_MODE=token         # 模式: rounds(按轮数) / token(按token数，推荐)
+      - HISTORY_ROUNDS_LIMIT=10    # 轮数模式: 保留最近 N 轮对话（1轮=1问1答）
+      - HISTORY_TOKEN_LIMIT=16000  # Token模式: 历史消息最大 token 数（32K上下文，预留一半给输出）
+      - HISTORY_TOKEN_SAFETY_MARGIN=500  # Token 安全边界
     depends_on:
       mysql:
         condition: service_healthy
