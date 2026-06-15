@@ -38,6 +38,7 @@ services:
     volumes:
       - ../logs:/app/logs
       - ../models:/app/models:ro
+      - ../data:/app/data:ro  # 挂载数据目录（包含城市代码CSV）
       # 开发模式：挂载代码目录（代码变化自动生效，无需重新构建）
       - ../app:/app/app
       - ../main.py:/app/main.py
