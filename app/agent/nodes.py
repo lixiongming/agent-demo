@@ -554,8 +554,9 @@ async def tool_decision_node(state: ChatState) -> Dict[str, Any]:
     
     功能：
     1. 分析用户问题，判断是否需要调用工具
-    2. 使用 LLM 自主决策
-    3. 返回工具调用决策
+    2. 优先检查路由决策（如果路由已指定工具）
+    3. 使用 LLM 自主决策（如果路由未指定）
+    4. 返回工具调用决策
     
     - OpenAI: LLM 自主决策工具调用
     - Google: 意图分类 + LLM 决策
@@ -570,6 +571,27 @@ async def tool_decision_node(state: ChatState) -> Dict[str, Any]:
         span.set_attribute("query", current_input)
         
         try:
+            # 1. 优先检查路由决策（如果路由已指定工具）
+            route_decision = state.get("route_decision", {})
+            if route_decision.get("needs_tool"):
+                tool_name = route_decision.get("tool_name")
+                logger.info(f"Tool decision from route: {tool_name}")
+                
+                span.set_attribute("needs_tool", True)
+                span.set_attribute("tool_name", tool_name)
+                span.set_attribute("method", "route_decision")
+                
+                return {
+                    "tool_decision": {
+                        "needs_tool": True,
+                        "tool_name": tool_name,
+                        "tool_args": {"question": current_input},
+                        "reason": route_decision.get("reason", "路由决策指定"),
+                        "method": "route_decision"
+                    }
+                }
+            
+            # 2. 如果路由未指定，使用 LLM 自主决策
             # 获取可用工具
             tool_registry = ToolRegistry()
             available_tools = tool_registry.list_tools()
@@ -631,6 +653,7 @@ async def tool_decision_node(state: ChatState) -> Dict[str, Any]:
             
             span.set_attribute("needs_tool", decision.get("needs_tool", False))
             span.set_attribute("tool_name", decision.get("tool_name", ""))
+            span.set_attribute("method", "llm")
             
             logger.info(f"Tool decision: {decision}")
             

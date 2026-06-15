@@ -1,11 +1,15 @@
 """工具模块"""
 from .registry import ToolRegistry, get_registry, register_tool
 from .knowledge import knowledge_search, RAG_TOOL_DEFINITION
+from .mysql_query import mysql_query_tool, MYSQL_TOOL_DEFINITION
+from .news_query import news_query_tool, smart_news_query, NEWS_TOOL_DEFINITION
 from langchain_core.tools import StructuredTool
 
 __all__ = [
     "ToolRegistry", "get_registry", "register_tool",
-    "knowledge_search", "RAG_TOOL_DEFINITION"
+    "knowledge_search", "RAG_TOOL_DEFINITION",
+    "mysql_query_tool", "MYSQL_TOOL_DEFINITION",
+    "news_query_tool", "smart_news_query", "NEWS_TOOL_DEFINITION"
 ]
 
 
@@ -37,6 +41,8 @@ def register_all_tools():
     from .search import search_tool
     from .calculator import calculator_tool
     from .weather import weather_tool
+    from .mysql_query import create_mysql_tool
+    from .news_query import create_news_tool
     
     # 注册RAG工具
     register_rag_tool()

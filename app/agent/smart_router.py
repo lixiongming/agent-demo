@@ -48,6 +48,33 @@ class SmartRouter:
         "问题", "错误", "故障", "异常", "报错", "解决"
     ]
     
+    # 数据库查询关键词
+    DATABASE_KEYWORDS = [
+        # 数据查询
+        "数据", "数据库", "查询", "统计", "报表", "分析",
+        # 业务数据
+        "订单", "用户", "客户", "商品", "库存", "销售",
+        "交易", "账单", "流水", "记录",
+        # 数量统计
+        "数量", "总数", "多少", "几个", "统计",
+        # 时间范围
+        "最近", "本周", "本月", "今天", "昨天",
+        # 条件查询
+        "超过", "大于", "小于", "等于", "包含"
+    ]
+    
+    # 新闻查询关键词（独立业务场景）
+    NEWS_KEYWORDS = [
+        # 新闻相关
+        "新闻", "消息", "资讯", "报道", "文章",
+        # 热门相关
+        "热门", "头条", "焦点", "排行",
+        # 作者相关
+        "作者", "来源", "报社", "媒体",
+        # 内容相关
+        "标题", "内容", "简介", "浏览量"
+    ]
+    
     # 通用问题关键词（不需要检索）
     GENERAL_KEYWORDS = [
         "你好", "您好", "早上好", "晚上好",
@@ -171,7 +198,31 @@ class SmartRouter:
     
     def _keyword_route(self, query: str) -> Optional[Dict[str, Any]]:
         """关键词快速路由（毫秒级）"""
-        # 检查是否包含知识库关键词
+        # 1. 检查新闻查询关键词（优先级最高）
+        for keyword in self.NEWS_KEYWORDS:
+            if keyword in query:
+                return {
+                    "needs_retrieval": False,  # 不需要向量检索
+                    "needs_tool": True,  # 需要调用工具
+                    "tool_name": "news_query",
+                    "method": "keyword",
+                    "reason": f"包含新闻查询关键词: {keyword}",
+                    "confidence": 0.95
+                }
+        
+        # 2. 检查数据库查询关键词
+        for keyword in self.DATABASE_KEYWORDS:
+            if keyword in query:
+                return {
+                    "needs_retrieval": False,  # 不需要向量检索
+                    "needs_tool": True,  # 需要调用工具
+                    "tool_name": "mysql_query",
+                    "method": "keyword",
+                    "reason": f"包含数据库查询关键词: {keyword}",
+                    "confidence": 0.95
+                }
+        
+        # 3. 检查是否包含知识库关键词
         for keyword in self.KNOWLEDGE_KEYWORDS:
             if keyword in query:
                 return {
@@ -181,7 +232,7 @@ class SmartRouter:
                     "confidence": 0.9
                 }
         
-        # 检查是否是通用问题
+        # 4. 检查是否是通用问题
         for keyword in self.GENERAL_KEYWORDS:
             if keyword in query:
                 return {
