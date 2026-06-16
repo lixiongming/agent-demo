@@ -199,11 +199,13 @@ class ChatService:
                         tool_used = False
                     else:
                         logger.info(f"工具已找到: {tool_name}, 开始执行...")
-                        
-                        # 如果工具参数为空，使用默认参数
-                        if not tool_args:
+
+                        # 强制使用 question 参数（确保调用 smart_news_query）
+                        # 智能路由器可能返回错误的参数，需要覆盖
+                        if tool_name == "news_query":
                             tool_args = {"question": message}
-                        
+                            logger.info(f"工具参数已修正: {tool_args}")
+
                         tool_result = await tool_registry.execute(tool_name, tool_args)
                         
                         logger.info(f"工具执行完成: {tool_name}, result={tool_result}")

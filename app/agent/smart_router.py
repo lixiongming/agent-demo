@@ -12,6 +12,7 @@ import json
 import time
 import re
 from typing import Dict, Any, Optional
+from collections import OrderedDict
 from app.llm import get_llm
 from app.tools.tool_registry import tool_registry
 from app.core.logger import get_logger
@@ -47,11 +48,19 @@ class SmartRouter:
     
     def __init__(self):
         self.llm = get_llm()
-        self.cache = {}  # 路由决策缓存
+        
+        # 生产级缓存配置
+        self.cache = OrderedDict()  # LRU 缓存（有序字典）
+        self.cache_timestamps = {}  # 缓存时间戳
+        self.cache_max_size = 1000  # 最大缓存数量
+        self.cache_ttl = 3600  # 缓存过期时间（秒），默认 1 小时
+        
         self.stats = {
             "total_requests": 0,
             "pattern_hits": 0,
             "cache_hits": 0,
+            "cache_expired": 0,  # 缓存过期次数
+            "cache_evicted": 0,  # 缓存淘汰次数
             "llm_calls": 0,
             "tool_calls": 0,
             "no_tool_calls": 0
@@ -86,22 +95,44 @@ class SmartRouter:
             logger.info(f"Route by pattern: {result}")
             return result
         
-        # 2. 检查缓存
+        # 2. 检查缓存（带过期时间和 LRU 更新）
         cache_key = query.strip().lower()
         if cache_key in self.cache:
-            self.stats["cache_hits"] += 1
-            result = self.cache[cache_key].copy()
-            result["method"] = "cache"
-            result["latency_ms"] = int((time.time() - start_time) * 1000)
-            logger.info(f"Route by cache: {result}")
-            return result
+            # 检查缓存是否过期
+            cache_age = time.time() - self.cache_timestamps.get(cache_key, 0)
+            if cache_age > self.cache_ttl:
+                # 缓存过期，删除
+                del self.cache[cache_key]
+                del self.cache_timestamps[cache_key]
+                self.stats["cache_expired"] += 1
+                logger.info(f"Cache expired: {cache_key[:20]} (age: {cache_age:.0f}s)")
+            else:
+                # 缓存命中，更新 LRU
+                self.stats["cache_hits"] += 1
+                self.cache.move_to_end(cache_key)  # 移到末尾（最近使用）
+                result = self.cache[cache_key].copy()
+                result["method"] = "cache"
+                result["latency_ms"] = int((time.time() - start_time) * 1000)
+                logger.info(f"Route by cache: {result}")
+                return result
         
         # 3. 使用LLM Function Calling决策
         async with tracer.span("llm_route"):
             result = await self._llm_route(query)
         
-        # 4. 缓存结果
+        # 4. 缓存结果（LRU 策略）
+        # 检查缓存大小，超过限制则淘汰最旧的
+        if len(self.cache) >= self.cache_max_size:
+            oldest_key = next(iter(self.cache))  # 获取最旧的键
+            del self.cache[oldest_key]
+            del self.cache_timestamps[oldest_key]
+            self.stats["cache_evicted"] += 1
+            logger.info(f"Cache evicted (LRU): {oldest_key[:20]}")
+        
+        # 添加新缓存
         self.cache[cache_key] = result.copy()
+        self.cache_timestamps[cache_key] = time.time()
+        self.cache.move_to_end(cache_key)  # 移到末尾（最近使用）
         
         # 5. 更新统计
         if result.get("needs_tool"):
@@ -244,6 +275,10 @@ class SmartRouter:
 2. 如果需要，调用哪个工具？
 3. 工具参数是什么？
 
+重要规则：
+- news_query 工具：参数必须是 {"question": "用户问题"}，不要生成其他参数
+- 工具会自动解析用户问题，你只需要传递原始问题
+
 请以JSON格式返回决策结果：
 {
     "needs_tool": true或false,
@@ -331,22 +366,53 @@ class SmartRouter:
         Returns:
             统计数据
         """
+        total = max(self.stats["total_requests"], 1)
         return {
             "total_requests": self.stats["total_requests"],
             "pattern_hits": self.stats["pattern_hits"],
             "cache_hits": self.stats["cache_hits"],
+            "cache_expired": self.stats["cache_expired"],
+            "cache_evicted": self.stats["cache_evicted"],
             "llm_calls": self.stats["llm_calls"],
             "tool_calls": self.stats["tool_calls"],
             "no_tool_calls": self.stats["no_tool_calls"],
-            "pattern_rate": self.stats["pattern_hits"] / max(self.stats["total_requests"], 1),
-            "cache_rate": self.stats["cache_hits"] / max(self.stats["total_requests"], 1),
-            "tool_rate": self.stats["tool_calls"] / max(self.stats["total_requests"], 1)
+            "cache_size": len(self.cache),
+            "cache_max_size": self.cache_max_size,
+            "cache_ttl": self.cache_ttl,
+            "pattern_rate": self.stats["pattern_hits"] / total,
+            "cache_rate": self.stats["cache_hits"] / total,
+            "tool_rate": self.stats["tool_calls"] / total
         }
     
     def clear_cache(self):
         """清空缓存"""
         self.cache.clear()
+        self.cache_timestamps.clear()
         logger.info("路由缓存已清空")
+    
+    def cleanup_expired_cache(self) -> int:
+        """清理过期缓存
+        
+        Returns:
+            清理的缓存数量
+        """
+        current_time = time.time()
+        expired_keys = []
+        
+        # 找出所有过期的缓存
+        for key, timestamp in self.cache_timestamps.items():
+            if current_time - timestamp > self.cache_ttl:
+                expired_keys.append(key)
+        
+        # 删除过期缓存
+        for key in expired_keys:
+            del self.cache[key]
+            del self.cache_timestamps[key]
+        
+        if expired_keys:
+            logger.info(f"Cleaned up {len(expired_keys)} expired cache entries")
+        
+        return len(expired_keys)
 
 
 # 全局路由器实例

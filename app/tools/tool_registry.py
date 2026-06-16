@@ -120,20 +120,11 @@ class ToolRegistry:
         # 2. 新闻查询工具
         self.register(ToolDefinition(
             name="news_query",
-            description="查询新闻信息，支持热门新闻、最近新闻、搜索新闻、作者新闻等多种查询类型。返回新闻标题、作者、浏览量等信息。",
+            description="查询新闻信息，支持热门新闻、最近新闻、搜索新闻、作者新闻等多种查询类型。工具会自动解析用户问题，返回新闻标题、作者、浏览量等信息。",
             parameters={
-                "query_type": {
+                "question": {
                     "type": "string",
-                    "description": "查询类型：hot（热门）、recent（最近）、search（搜索）、author（作者）、stats（统计）",
-                    "enum": ["hot", "recent", "search", "author", "stats"]
-                },
-                "keyword": {
-                    "type": "string",
-                    "description": "搜索关键词（可选）"
-                },
-                "author": {
-                    "type": "string",
-                    "description": "作者名称（可选）"
+                    "description": "用户问题（如：热门新闻、最近新闻、搜索科技新闻、新华社的新闻）"
                 }
             },
             examples=[
@@ -150,9 +141,17 @@ class ToolRegistry:
             name="mysql_query",
             description="查询数据库中的业务数据，支持订单、用户、商品、库存等数据查询。自动生成SQL查询语句，返回数据统计结果。",
             parameters={
-                "query": {
+                "question": {
                     "type": "string",
-                    "description": "查询描述（如：查询最近一周的订单数量）"
+                    "description": "查询问题（如：查询最近一周的订单数量）"
+                },
+                "table_info": {
+                    "type": "string",
+                    "description": "表结构信息（可选）"
+                },
+                "direct_sql": {
+                    "type": "string",
+                    "description": "直接执行的 SQL（可选，优先级更高）"
                 }
             },
             examples=[
@@ -171,6 +170,14 @@ class ToolRegistry:
                 "query": {
                     "type": "string",
                     "description": "检索关键词或问题"
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "返回结果数量（可选，默认5）"
+                },
+                "threshold": {
+                    "type": "number",
+                    "description": "相似度阈值（可选，默认0.5）"
                 }
             },
             examples=[
@@ -198,7 +205,29 @@ class ToolRegistry:
             ],
             category="math"
         ))
-        
+
+        # 6. 网络搜索工具
+        self.register(ToolDefinition(
+            name="web_search",
+            description="使用 Tavily API 进行网络搜索，获取最新的网络信息。支持搜索新闻、技术文档、产品信息等。",
+            parameters={
+                "query": {
+                    "type": "string",
+                    "description": "搜索关键词"
+                },
+                "num_results": {
+                    "type": "integer",
+                    "description": "返回结果数量（可选，默认5）"
+                }
+            },
+            examples=[
+                "最新科技新闻",
+                "Python 教程",
+                "产品评测"
+            ],
+            category="search"
+        ))
+
         logger.info(f"已注册 {len(self.tools)} 个工具")
     
     def register(self, tool: ToolDefinition):

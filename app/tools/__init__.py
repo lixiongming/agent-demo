@@ -8,20 +8,18 @@
 - 清晰的导出列表
 """
 from .registry import ToolRegistry, get_registry, register_tool, ToolConfig
-from langchain_core.tools import StructuredTool
 
 __all__ = [
     # 注册中心
-    "ToolRegistry", 
-    "get_registry", 
+    "ToolRegistry",
+    "get_registry",
     "register_tool",
     "ToolConfig",
-    
+
     # 工具定义（用于智能路由）
     "RAG_TOOL_DEFINITION",
     "MYSQL_TOOL_DEFINITION",
-    "NEWS_TOOL_DEFINITION",
-    
+
     # 工具函数
     "knowledge_search",
     "smart_news_query",
@@ -32,9 +30,9 @@ __all__ = [
 # 工具定义导入
 # ============================================
 
-from .knowledge import RAG_TOOL_DEFINITION, knowledge_search, knowledge_tool
-from .mysql_query import MYSQL_TOOL_DEFINITION, mysql_query_tool
-from .news_query import NEWS_TOOL_DEFINITION, smart_news_query, news_query_tool
+from .knowledge import RAG_TOOL_DEFINITION, knowledge_search
+from .mysql_query import MYSQL_TOOL_DEFINITION
+from .news_query import smart_news_query
 
 
 # ============================================

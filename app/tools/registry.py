@@ -9,19 +9,19 @@
 - 监控统计
 - 权限控制
 - 重试机制
+- 参数验证（Pydantic）
 """
 from typing import Dict, List, Any, Optional, Callable
 from langchain_core.tools import Tool, StructuredTool
 from app.core.logger import get_logger
 from app.core.exceptions import ToolException
-from app.core.rate_limit import CircuitBreaker, CircuitBreakerManager
+from app.core.rate_limit import CircuitBreaker
 from app.core.tracing import tracer
 from app.core.error_codes import ErrorCode, APIError
 
 import asyncio
 import time
-from functools import wraps
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = get_logger(__name__)
 
@@ -212,33 +212,104 @@ class ToolRegistry:
     
     def _check_rate_limit(self, name: str) -> bool:
         """检查限流
-        
+
         Args:
             name: 工具名称
-            
+
         Returns:
             是否允许调用
         """
         config = self._configs.get(name)
         if not config:
             return True
-        
+
         current_time = time.time()
         window_start = current_time - config.rate_period
-        
+
         # 清理过期的请求记录
         self._rate_counters[name] = [
             t for t in self._rate_counters[name] if t > window_start
         ]
-        
+
         # 检查是否超过限制
         if len(self._rate_counters[name]) >= config.rate_limit:
             logger.warning(f"Tool rate limit exceeded: {name}")
             return False
-        
+
         # 记录本次请求
         self._rate_counters[name].append(current_time)
         return True
+
+    def _validate_tool_args(self, tool: Tool, args: dict, tool_name: str) -> dict:
+        """验证工具参数（生产级）
+
+        功能：
+        1. 类型检查
+        2. 必填参数检查
+        3. 默认值填充
+        4. 过滤未定义参数
+        5. 详细的错误提示
+
+        Args:
+            tool: 工具实例
+            args: 原始参数
+            tool_name: 工具名称
+
+        Returns:
+            验证后的参数
+
+        Raises:
+            ToolException: 参数验证失败
+        """
+        if not args:
+            return {}
+
+        # 没有定义 schema，直接返回原始参数
+        if not hasattr(tool, 'args_schema') or not tool.args_schema:
+            logger.debug(f"Tool {tool_name} has no args_schema, using raw args")
+            return args
+
+        try:
+            from pydantic import ValidationError
+
+            # Pydantic 验证：类型检查 + 必填检查 + 默认值
+            validated = tool.args_schema.model_validate(args)
+
+            # 转换为字典（包含默认值）
+            validated_args = validated.model_dump()
+
+            # 记录参数变化
+            if set(validated_args.keys()) != set(args.keys()):
+                extra_keys = set(args.keys()) - set(validated_args.keys())
+                if extra_keys:
+                    logger.info(
+                        f"Tool {tool_name}: filtered extra args {list(extra_keys)}, "
+                        f"kept {list(validated_args.keys())}"
+                    )
+
+            return validated_args
+
+        except ValidationError as e:
+            # 构建详细的错误信息
+            errors = e.errors()
+            error_msgs = []
+            for err in errors:
+                field = ".".join(str(loc) for loc in err.get("loc", []))
+                msg = err.get("msg", "validation error")
+                error_msgs.append(f"{field}: {msg}")
+
+            error_detail = "; ".join(error_msgs)
+            logger.error(f"Tool {tool_name} 参数验证失败: {error_detail}")
+
+            raise ToolException(
+                f"参数验证失败: {error_detail}",
+                tool_name,
+                details={"errors": errors, "input_args": args}
+            )
+        except Exception as e:
+            logger.error(f"Tool {tool_name} 参数验证异常: {e}")
+            # 降级：返回原始参数（保持兼容性）
+            return args
     
     async def execute(
         self,
@@ -323,10 +394,12 @@ class ToolRegistry:
                     
                     if not hasattr(func, "__call__"):
                         raise ToolException(f"Tool function not callable: {name}", name)
-                    
-                    # 执行工具（带超时）
+
+                    # 参数验证与过滤（生产级）
+                    validated_args = self._validate_tool_args(tool, args, name)
+
                     # 调用函数获取结果
-                    call_result = func(**args) if args else func()
+                    call_result = func(**validated_args) if validated_args else func()
                     
                     # 如果结果是 coroutine，等待它
                     if asyncio.iscoroutine(call_result):
