@@ -53,6 +53,7 @@ class ChatState(TypedDict):
     - ChatService 只做入口适配
     - 支持完整的会话生命周期
     - 支持工具调用
+    - 支持 ReAct 循环
     """
 
     # ===== 消息相关 =====
@@ -72,19 +73,25 @@ class ChatState(TypedDict):
     history_count: int
 
     # ===== 智能路由 =====
-    route_decision: Optional[dict]  # {"needs_retrieval": bool, "method": str, "reason": str}
+    route_decision: Optional[dict]  # {"needs_retrieval": bool, "tool_calls": list, "method": str}
 
     # ===== RAG 检索 =====
     rag_context: Optional[str]
     rag_sources: Annotated[List[dict], add]
     rag_used: bool
-    rag_strategy: Optional[str]  # direct_return / llm_reference / no_match
+    rag_strategy: Optional[str]
     rag_score: float
 
     # ===== 工具调用 =====
-    tool_decision: Optional[dict]  # {"needs_tool": bool, "tool_name": str, "tool_args": dict}
+    tool_decision: Optional[dict]  # {"needs_tool": bool, "tool_calls": list}
     tool_results: Annotated[List[dict], add]
+    tool_messages: Annotated[List[dict], add]  # ToolMessage 格式
     tool_used: bool
+
+    # ===== ReAct 循环 =====
+    react_iteration: int  # 当前迭代次数
+    react_status: str  # tool_call / completed / max_iterations
+    react_tool_calls: List[dict]  # 当前轮次的工具调用
 
     # ===== 消息保存 =====
     user_message_saved: bool

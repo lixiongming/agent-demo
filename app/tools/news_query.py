@@ -1,4 +1,4 @@
-"""新闻查询工具
+"""新闻查询工具 - 大厂标准实现
 
 功能：
 - 新闻搜索
@@ -7,18 +7,71 @@
 - 作者新闻
 - 新闻统计
 
-用于聊天机器人智能查询新闻数据
+核心改进：
+- 使用 Function Calling 替代手动 JSON 解析
+- 完善参数 Schema 定义
+- 支持多查询类型
 """
 from typing import Dict, Any, List, Optional
-from langchain_core.tools import Tool
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.news import NewsRepository
 from app.core.logger import get_logger
 from app.core.tracing import tracer
 from app.tools.registry import register_tool, ToolConfig
-import json
 
 logger = get_logger(__name__)
+
+
+# ============================================
+# 参数 Schema 定义（大厂标准）
+# ============================================
+
+class NewsQueryArgs(BaseModel):
+    """新闻查询参数 - 完整 Schema
+    
+    用于 Function Calling 的参数定义
+    """
+    question: str = Field(
+        ...,
+        description="用户问题（自动解析查询类型，如：热门新闻、搜索科技新闻、新华社的新闻）"
+    )
+
+
+class NewsQueryDecision(BaseModel):
+    """新闻查询决策结果 - Function Calling Schema
+    
+    LLM 返回的查询决策
+    """
+    query_type: str = Field(
+        ...,
+        description="查询类型：hot(热门)、recent(最近)、search(搜索)、author(作者)、stats(统计)、today(今天)、week(本周)、month(本月)"
+    )
+    keyword: Optional[str] = Field(
+        None,
+        description="搜索关键词（search 类型使用）"
+    )
+    author: Optional[str] = Field(
+        None,
+        description="作者名称（author 类型使用）"
+    )
+    limit: int = Field(
+        10,
+        description="返回数量（默认10）",
+        ge=1,
+        le=50
+    )
+    days: Optional[int] = Field(
+        None,
+        description="时间范围（天数）",
+        ge=1,
+        le=365
+    )
+    reason: str = Field(
+        "",
+        description="决策原因"
+    )
 
 
 # ============================================
@@ -43,18 +96,10 @@ async def news_query_tool(
     
     Args:
         query_type: 查询类型
-            - search: 搜索新闻
-            - hot: 热门新闻
-            - recent: 最近新闻
-            - author: 作者新闻
-            - stats: 新闻统计
-            - today: 今天新闻
-            - week: 本周新闻
-            - month: 本月新闻
-        keyword: 搜索关键词（search 类型）
-        author: 作者名称（author 类型）
+        keyword: 搜索关键词
+        author: 作者名称
         limit: 返回数量
-        days: 时间范围（天数）
+        days: 时间范围
         
     Returns:
         查询结果
@@ -66,24 +111,20 @@ async def news_query_tool(
         logger.info(f"News query: type={query_type}, keyword={keyword}, author={author}")
         
         try:
-            # 获取数据库会话
             async with AsyncSessionLocal() as db:
                 repo = NewsRepository(db)
                 
                 # 根据查询类型执行不同查询
                 if query_type == "search":
-                    # 搜索新闻
                     if not keyword:
                         return {
                             "success": False,
                             "error": "搜索需要提供关键词"
                         }
-                    
                     news_list = await repo.search(keyword, limit)
                     result_type = "搜索结果"
                     
                 elif query_type == "hot":
-                    # 热门新闻
                     if days:
                         news_list = await repo.get_hot_news_by_time(days, limit)
                         result_type = f"最近{days}天热门新闻"
@@ -92,26 +133,21 @@ async def news_query_tool(
                         result_type = "热门新闻"
                     
                 elif query_type == "recent":
-                    # 最近新闻
                     news_list = await repo.get_recent(limit)
                     result_type = "最近新闻"
                     
                 elif query_type == "author":
-                    # 作者新闻
                     if not author:
                         return {
                             "success": False,
                             "error": "作者查询需要提供作者名称"
                         }
-                    
                     news_list = await repo.get_by_author(author, limit)
                     result_type = f"作者 '{author}' 的新闻"
                     
                 elif query_type == "stats":
-                    # 新闻统计
                     stats = await repo.get_stats()
                     span.set_attribute("result", "success")
-                    
                     return {
                         "success": True,
                         "query_type": query_type,
@@ -120,22 +156,18 @@ async def news_query_tool(
                     }
                     
                 elif query_type == "today":
-                    # 今天新闻
                     news_list = await repo.get_today_news(limit)
                     result_type = "今天新闻"
                     
                 elif query_type == "week":
-                    # 本周新闻
                     news_list = await repo.get_this_week_news(limit)
                     result_type = "本周新闻"
                     
                 elif query_type == "month":
-                    # 本月新闻
                     news_list = await repo.get_this_month_news(limit)
                     result_type = "本月新闻"
                     
                 else:
-                    # 默认：最近新闻
                     news_list = await repo.get_recent(limit)
                     result_type = "最近新闻"
                 
@@ -150,7 +182,6 @@ async def news_query_tool(
                         "news_list": []
                     }
                 
-                # 转换为摘要列表
                 news_data = [news.to_summary_dict() for news in news_list]
                 
                 span.set_attribute("news_count", len(news_list))
@@ -179,13 +210,16 @@ async def news_query_tool(
 
 
 # ============================================
-# 智能新闻查询（LLM 决策）
+# 智能新闻查询 - Function Calling（大厂标准）
 # ============================================
 
 async def smart_news_query(question: str) -> Dict[str, Any]:
-    """智能新闻查询
+    """智能新闻查询 - Function Calling 实现
     
-    根据用户问题自动判断查询类型
+    核心改进：
+    - 使用 bind_tools() 替代手动 JSON 解析
+    - 直接使用 tool_calls 属性
+    - 无需解析 JSON，格式保证正确
     
     Args:
         question: 用户问题
@@ -200,59 +234,103 @@ async def smart_news_query(question: str) -> Dict[str, Any]:
     settings = get_settings()
     llm = get_llm(settings.DEFAULT_MODEL)
     
-    # 构建 LLM 提示词
-    prompt = f"""你是一个新闻查询助手，需要根据用户问题判断查询类型。
+    # 定义 Function Calling 工具（大厂标准）
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "news_query_decision",
+            "description": "根据用户问题判断新闻查询类型和参数",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query_type": {
+                        "type": "string",
+                        "enum": ["hot", "recent", "search", "author", "stats", "today", "week", "month"],
+                        "description": "查询类型：hot(热门新闻)、recent(最近新闻)、search(关键词搜索)、author(作者新闻)、stats(统计)、today(今天)、week(本周)、month(本月)"
+                    },
+                    "keyword": {
+                        "type": "string",
+                        "description": "搜索关键词（仅 search 类型使用）"
+                    },
+                    "author": {
+                        "type": "string",
+                        "description": "作者名称（仅 author 类型使用）"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "返回数量（默认10，最大50）",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 50
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "时间范围天数（可选）",
+                        "minimum": 1,
+                        "maximum": 365
+                    }
+                },
+                "required": ["query_type"]
+            }
+        }
+    }]
+    
+    # 绑定工具到 LLM（大厂标准）
+    llm_with_tools = llm.bind_tools(tools)
+    
+    # 构建提示词
+    prompt = f"""分析用户问题，判断应该使用哪种新闻查询类型。
 
-可用查询类型：
-- hot: 热门新闻（浏览量排序，不限制时间范围，返回所有热门新闻）
-- recent: 最近新闻（时间排序，返回最新新闻）
-- search: 搜索新闻（关键词搜索）
-- author: 作者新闻（按作者查询）
-- stats: 新闻统计（统计数据）
-- today: 今天新闻（只返回今天的新闻）
-- week: 本周新闻（只返回本周的新闻）
-- month: 本月新闻（只返回本月的新闻）
+重要规则：
+1. "热门"、"最热" → hot 类型
+2. "最近"、"最新" → recent 类型
+3. "搜索"、"关于" → search 类型（需要提取关键词）
+4. "作者"、"某某的" → author 类型（需要提取作者名）
+5. "统计"、"总数" → stats 类型
+6. "今天" → today 类型
+7. "本周" → week 类型
+8. "本月" → month 类型
 
 用户问题：{question}
 
-请分析用户问题，判断应该使用哪种查询类型。
+请调用 news_query_decision 函数返回决策结果。"""
 
-重要规则：
-1. 如果用户问题包含"热门"、"最热"、"热门新闻"等关键词，必须判断为 hot 类型
-2. hot 类型不设置时间范围（days参数），返回所有热门新闻
-3. 只有用户明确提到"今天"、"本周"、"本月"等时间词时，才使用 today/week/month 类型
-
-请以JSON格式返回：
-{{"query_type": "查询类型", "reason": "判断原因"}}
-
-只返回JSON，不要其他内容。"""
-
-    # 调用 LLM
-    response = await llm.ainvoke([HumanMessage(content=prompt)])
-    
-    # 解析结果
     try:
-        content = response.content.strip()
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
+        # 调用 LLM（大厂标准）
+        response = await llm_with_tools.ainvoke([HumanMessage(content=prompt)])
         
-        decision = json.loads(content)
+        # 直接使用 tool_calls 属性（无需手动解析）
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            tc = response.tool_calls[0]
+            args = tc.get("args", {})
+            
+            query_type = args.get("query_type", "recent")
+            keyword = args.get("keyword")
+            author = args.get("author")
+            limit = args.get("limit", 10)
+            days = args.get("days")
+            
+            logger.info(f"Smart news query (Function Calling): type={query_type}, keyword={keyword}, author={author}")
+            
+            # 执行查询
+            return await news_query_tool(
+                query_type=query_type,
+                keyword=keyword,
+                author=author,
+                limit=limit,
+                days=days
+            )
         
-        logger.info(f"Smart news query decision: {decision}")
-        
-        # 执行查询
+        # LLM 未返回工具调用，降级为搜索
+        logger.warning("LLM did not return tool_calls, fallback to search")
         return await news_query_tool(
-            query_type=decision.get("query_type", "recent"),
-            keyword=decision.get("keyword"),
-            author=decision.get("author"),
-            limit=decision.get("limit", 10),
-            days=decision.get("days")
+            query_type="search",
+            keyword=question,
+            limit=10
         )
     
     except Exception as e:
-        logger.error(f"Smart news query parse error: {e}")
+        logger.error(f"Smart news query error: {e}")
         # 降级：默认搜索
         return await news_query_tool(
             query_type="search",
@@ -267,19 +345,10 @@ async def smart_news_query(question: str) -> Dict[str, Any]:
 
 def create_news_tool():
     """创建新闻查询工具"""
-    from langchain_core.tools import StructuredTool
-    from pydantic import BaseModel, Field
-    
-    # 定义参数 schema
-    class NewsQueryArgs(BaseModel):
-        """新闻查询参数"""
-        question: str = Field(description="用户问题（自动解析查询类型）")
-    
-    # 使用 StructuredTool 正确处理异步函数
     tool = StructuredTool(
         name="news_query",
-        coroutine=smart_news_query,  # 异步函数
-        args_schema=NewsQueryArgs,  # 参数 schema
+        coroutine=smart_news_query,
+        args_schema=NewsQueryArgs,
         description="""新闻查询工具。
 
 功能：
@@ -308,10 +377,9 @@ def create_news_tool():
 """
     )
     
-    # 配置：超时30秒，每分钟100次，失败5次熔断
     config = ToolConfig(
         name="news_query",
-        description="新闻查询工具",
+        description="新闻查询工具（Function Calling 实现）",
         timeout=30,
         rate_limit=100,
         rate_period=60,

@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     # Agent配置
     MAX_ITERATIONS: int = 10
     AGENT_TIMEOUT: int = 60
+    
+    # ReAct 循环配置（大厂标准）
+    MAX_REACT_ITERATIONS: int = 5  # 最大工具调用轮次
+    REACT_TIMEOUT: int = 120  # ReAct 总超时时间（秒）
 
     # 对话历史配置
     HISTORY_ENABLED: bool = True  # 是否加载历史消息

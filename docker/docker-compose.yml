@@ -18,8 +18,8 @@ services:
       # Redis 配置
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      # Qdrant 配置
-      - QDRANT_HOST=qdrant
+      # Qdrant 配置（连接到本地 Qdrant）
+      - QDRANT_HOST=host.docker.internal
       - QDRANT_PORT=6333
       - QDRANT_COLLECTION=knowledge_base
       # 对话历史配置
@@ -70,14 +70,14 @@ services:
     networks:
       - agent_network
 
-  # MySQL（使用 3306 端口避免与本地 MySQL 冲突）
+  # MySQL（使用 3307 端口避免与本地 MySQL 冲突）
   mysql:
     image: mysql:8.0
     environment:
       - MYSQL_ROOT_PASSWORD=123456
       - MYSQL_DATABASE=agent_db
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - ../data/volumes/mysql:/var/lib/mysql
       # 不再挂载 SQL 文件，让 init_db() 自动创建表结构（与本地一致）

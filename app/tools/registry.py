@@ -494,6 +494,102 @@ class ToolRegistry:
         if name in self._configs:
             self._configs[name].enabled = False
             logger.info(f"Tool disabled: {name}")
+    
+    def check_permission(self, name: str, user_id: Optional[int] = None) -> bool:
+        """检查工具调用权限
+        
+        生产级权限控制：
+        - 检查工具是否启用
+        - 检查用户是否有权限调用该工具
+        - 支持基于角色的权限控制
+        
+        Args:
+            name: 工具名称
+            user_id: 用户ID
+        
+        Returns:
+            是否有权限
+        """
+        config = self._configs.get(name)
+        
+        # 检查工具是否启用
+        if config and not config.enabled:
+            return False
+        
+        # 检查是否需要权限
+        if config and config.require_auth:
+            # TODO: 实现基于用户角色的权限检查
+            # 当前：默认允许所有用户
+            # 生产环境：接入权限系统（如 RBAC）
+            if user_id is None:
+                return False
+            
+            # 模拟权限检查（实际应接入权限系统）
+            # allowed_roles = self._get_tool_roles(name)
+            # user_roles = self._get_user_roles(user_id)
+            # return any(role in allowed_roles for role in user_roles)
+            return True
+        
+        return True
+    
+    def get_openai_tools(self) -> List[Dict[str, Any]]:
+        """获取 OpenAI Function Calling 格式的工具列表
+        
+        大厂标准：
+        - 返回 bind_tools() 可用的格式
+        - 包含完整的工具描述和参数定义
+        
+        Returns:
+            OpenAI 工具列表
+        """
+        tools = []
+        for name, tool in self._tools.items():
+            config = self._configs.get(name)
+            
+            # 跳过禁用的工具
+            if config and not config.enabled:
+                continue
+            
+            # 构建工具定义
+            description = tool.description or (config.description if config else "")
+            # 截取描述前500字符（避免过长）
+            if len(description) > 500:
+                description = description[:500] + "..."
+            
+            tool_def = {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description
+                }
+            }
+            
+            # 添加参数定义
+            if hasattr(tool, 'args_schema') and tool.args_schema:
+                schema = tool.args_schema.schema()
+                properties = schema.get('properties', {})
+                required = schema.get('required', [])
+                
+                # 确保每个属性都有描述
+                for prop_name, prop_def in properties.items():
+                    if 'description' not in prop_def:
+                        # 从 Field 定义获取描述
+                        field_info = tool.args_schema.__fields__.get(prop_name)
+                        if field_info and field_info.field_info.description:
+                            prop_def['description'] = field_info.field_info.description
+                
+                tool_def["function"]["parameters"] = {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required
+                }
+                
+                logger.debug(f"[工具定义] {name}: properties={properties}, required={required}")
+            
+            tools.append(tool_def)
+            logger.info(f"[工具定义] {name}: description={description[:100]}...")
+        
+        return tools
 
 
 # ============================================

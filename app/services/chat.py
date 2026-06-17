@@ -85,9 +85,10 @@ class ChatService:
             "assistant_message_saved": False
         }
         
-        # 调用 Agent 图
+        # 调用 Agent 图（需要传递 config 参数给 Checkpointer）
         app = _get_chat_app()
-        result = await app.ainvoke(initial_state)
+        config = {"configurable": {"thread_id": session_id}}
+        result = await app.ainvoke(initial_state, config=config)
         
         # 获取消息数量
         from app.db import AsyncSessionLocal, SessionRepository
@@ -157,6 +158,9 @@ class ChatService:
 
                 db_session_id = session.id
 
+                # 提交事务（确保 session 被保存）
+                await db.commit()
+
                 # 使用历史管理服务加载消息
                 from app.services.history import HistoryManager
                 history_manager = HistoryManager(db)
@@ -170,24 +174,41 @@ class ChatService:
             # 使用智能路由（符合大厂标准）
             decision = await smart_route(message)
             
+            logger.info(f"[路由决策] 完整结果: {decision}")
+            
             needs_retrieval = decision.get("needs_retrieval", False)
             needs_tool = decision.get("needs_tool", False)
-            tool_name = decision.get("tool_name")
-            tool_args = decision.get("tool_args", {})
+            
+            # 解析 tool_calls（大厂标准格式）
+            tool_calls = decision.get("tool_calls", [])
+            if tool_calls:
+                # 取第一个工具调用（当前只支持单工具）
+                first_call = tool_calls[0]
+                tool_name = first_call.get("name")
+                tool_args = first_call.get("args", {})
+                logger.info(f"[路由决策] 工具调用: name={tool_name}, args={tool_args}")
+            else:
+                tool_name = None
+                tool_args = {}
+            
             rag_strategy = decision.get("method")
+            confidence = decision.get("confidence", 0.0)
+            
+            logger.info(f"[路由决策] 最终结果: needs_tool={needs_tool}, tool_name={tool_name}, confidence={confidence}")
         
         # ===== 3. 工具执行（按需）=====
         tool_used = False
         tool_result = None
         
-        logger.info(f"路由决策结果: needs_tool={needs_tool}, tool_name={tool_name}, tool_args={tool_args}")
+        logger.info(f"[工具执行] 开始判断: needs_tool={needs_tool}, tool_name={tool_name}")
         
         if needs_tool and tool_name:
             async with tracer.span("tool_execute"):
                 try:
                     from app.tools.registry import get_registry
                     
-                    logger.info(f"开始执行工具: {tool_name} with args: {tool_args}")
+                    logger.info(f"[工具执行] 开始执行工具: {tool_name}")
+                    logger.info(f"[工具执行] 原始参数: {tool_args}")
                     
                     # 使用全局工具注册中心（单例模式）
                     tool_registry = get_registry()
@@ -195,32 +216,37 @@ class ChatService:
                     # 检查工具是否存在
                     tool = tool_registry.get_tool(tool_name)
                     if not tool:
-                        logger.error(f"工具不存在: {tool_name}")
+                        logger.error(f"[工具执行] 工具不存在: {tool_name}")
                         tool_used = False
                     else:
-                        logger.info(f"工具已找到: {tool_name}, 开始执行...")
+                        logger.info(f"[工具执行] 工具已找到: {tool_name}")
+                        logger.info(f"[工具执行] 工具描述: {tool.description[:100]}...")
 
                         # 强制使用 question 参数（确保调用 smart_news_query）
                         # 智能路由器可能返回错误的参数，需要覆盖
                         if tool_name == "news_query":
                             tool_args = {"question": message}
-                            logger.info(f"工具参数已修正: {tool_args}")
+                            logger.info(f"[工具执行] 参数已修正为: {tool_args}")
 
+                        logger.info(f"[工具执行] 最终参数: {tool_args}")
+                        
                         tool_result = await tool_registry.execute(tool_name, tool_args)
                         
-                        logger.info(f"工具执行完成: {tool_name}, result={tool_result}")
+                        logger.info(f"[工具执行] 执行完成: {tool_name}")
+                        logger.info(f"[工具执行] 结果: success={tool_result.get('success')}")
+                        logger.info(f"[工具执行] 结果详情: {str(tool_result)[:500]}...")
                         
                         if tool_result and tool_result.get("success"):
                             tool_used = True
-                            logger.info(f"工具执行成功: {tool_name}")
+                            logger.info(f"[工具执行] 执行成功: {tool_name}")
                         else:
-                            logger.warning(f"工具执行失败: {tool_result}")
+                            logger.warning(f"[工具执行] 执行失败: {tool_result}")
                 except Exception as e:
-                    logger.error(f"工具执行异常: {e}")
+                    logger.error(f"[工具执行] 异常: {e}")
                     import traceback
-                    logger.error(traceback.format_exc())
+                    logger.error(f"[工具执行] 异常堆栈: {traceback.format_exc()}")
         else:
-            logger.info(f"跳过工具执行: needs_tool={needs_tool}, tool_name={tool_name}")
+            logger.info(f"[工具执行] 跳过执行: needs_tool={needs_tool}, tool_name={tool_name}")
         
         # ===== 4. RAG 检索（按需）=====
         if needs_retrieval:
@@ -317,31 +343,28 @@ class ChatService:
                     tool_context = "\n".join(news_info)
                     
                     messages.insert(0, SystemMessage(
-                        content=f"""以下是工具查询返回的新闻数据，请基于这些真实数据回答用户问题：
-
-{tool_context}
-
-请基于以上真实新闻数据回答用户问题。"""
+                        content=f"""以下是工具查询返回的新闻数据，请基于这些真实数据回答用户问题：{tool_context}请基于以上真实新闻数据回答用户问题。"""
                     ))
+            # 特殊处理知识库检索结果
+            elif tool_name == "knowledge_search" and tool_result.get("found"):
+                knowledge_content = tool_result.get("knowledge", "")
+                total_results = tool_result.get("total_results", 0)
+                
+                messages.insert(0, SystemMessage(
+                    content=f"""以下是知识库中检索到的 {total_results} 条相关内容，请参考这些内容回答用户问题：{knowledge_content}请基于以上知识库内容回答用户问题。"""
+                ))
+                logger.info(f"知识库检索结果已注入上下文: {total_results} 条内容")
             # 特殊处理天气查询结果
             elif tool_name == "get_weather" and tool_result.get("success"):
                 weather_desc = tool_result.get("description", "")
                 
                 messages.insert(0, SystemMessage(
-                    content=f"""以下是工具查询返回的天气数据，请基于这些真实数据回答用户问题：
-
-{weather_desc}
-
-请基于以上真实天气数据回答用户问题，用友好的语言描述天气情况。"""
+                    content=f"""以下是工具查询返回的天气数据，请基于这些真实数据回答用户问题：{weather_desc}请基于以上真实天气数据回答用户问题，用友好的语言描述天气情况。"""
                 ))
             else:
                 # 其他工具，直接显示结果
                 messages.insert(0, SystemMessage(
-                    content=f"""以下是工具查询返回的数据，请基于这些数据回答用户问题：
-
-{tool_result}
-
-请基于以上数据回答用户问题。"""
+                    content=f"""以下是工具查询返回的数据，请基于这些数据回答用户问题：{tool_result}请基于以上数据回答用户问题。"""
                 ))
 
         # 打印发送给模型的消息摘要（详细日志只在 DEBUG 模式）

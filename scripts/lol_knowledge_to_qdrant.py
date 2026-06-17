@@ -3,11 +3,12 @@ import re
 import json
 import sys
 import os
+import asyncio
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.embeddings.embedding import EmbeddingService
+from app.embeddings import get_embedding_service
 from app.embeddings.qdrant_store import QdrantKnowledgeStore
 
 
@@ -41,9 +42,9 @@ def parse_lol_knowledge_base(file_path: str) -> list:
     return documents
 
 
-def store_lol_knowledge_to_qdrant(
+async def store_lol_knowledge_to_qdrant(
     file_path: str,
-    collection_name: str = "lol_knowledge_base",
+    collection_name: str = "knowledge_base",
     use_memory: bool = False,
     qdrant_host: str = "localhost",
     qdrant_port: int = 6333,
@@ -70,20 +71,25 @@ def store_lol_knowledge_to_qdrant(
 
     # 初始化 Embedding 服务
     print("\n[INFO] 初始化 Embedding 服务...")
-    embedding = EmbeddingService()
+    embedding = get_embedding_service()
 
     # 初始化 Qdrant 存储
     print("[INFO] 初始化 Qdrant 存储...")
+    vector_size = embedding.get_embedding_dim()  # 获取向量维度
+    print(f"[INFO] 向量维度: {vector_size}")
+    
     if use_memory:
         store = QdrantKnowledgeStore(
             collection_name=collection_name,
             path=":memory:",
+            vector_size=vector_size,
         )
     else:
         store = QdrantKnowledgeStore(
             collection_name=collection_name,
             host=qdrant_host,
             port=qdrant_port,
+            vector_size=vector_size,
         )
 
     # 清空现有数据
@@ -105,7 +111,7 @@ def store_lol_knowledge_to_qdrant(
 
         # 提取 embedding_text 并生成向量
         texts = [doc.get("embedding_text", "") for doc in batch]
-        vectors = embedding.embed_texts(texts)
+        vectors = await embedding.embed_texts(texts)
 
         # 添加到 Qdrant
         store.add_documents_batch(documents=batch, vectors=vectors)
@@ -121,13 +127,13 @@ def store_lol_knowledge_to_qdrant(
     return store
 
 
-def test_search(store: QdrantKnowledgeStore, query: str, doc_type: str = None):
+async def test_search(store: QdrantKnowledgeStore, query: str, doc_type: str = None):
     """测试搜索功能"""
     print(f"\n[TEST] 搜索测试: '{query}'")
 
     # 初始化 Embedding 服务
-    embedding = EmbeddingService()
-    query_vector = embedding.embed_text(query)
+    embedding = get_embedding_service()
+    query_vector = await embedding.embed_text(query)
 
     # 执行搜索（先不带过滤条件测试）
     results = store.search(
@@ -147,7 +153,7 @@ def test_search(store: QdrantKnowledgeStore, query: str, doc_type: str = None):
         print(f"内容预览: {content[:100]}...")
 
 
-def main():
+async def main():
     """主函数"""
     import argparse
 
@@ -158,7 +164,7 @@ def main():
     )
     parser.add_argument(
         "--collection",
-        default="lol_knowledge_base",
+        default="knowledge_base",
         help="Qdrant 集合名称",
     )
     parser.add_argument(
@@ -191,7 +197,7 @@ def main():
     args = parser.parse_args()
 
     # 导入数据
-    store = store_lol_knowledge_to_qdrant(
+    store = await store_lol_knowledge_to_qdrant(
         file_path=args.file_path,
         collection_name=args.collection,
         use_memory=args.memory,
@@ -202,9 +208,9 @@ def main():
 
     # 测试搜索
     if args.test and store:
-        test_search(store, "亚索怎么玩", doc_type="hero")
-        test_search(store, "无尽之刃", doc_type="item")
+        await test_search(store, "亚索怎么玩", doc_type="hero")
+        await test_search(store, "无尽之刃", doc_type="item")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

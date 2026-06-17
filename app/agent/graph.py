@@ -1,4 +1,11 @@
-"""LangGraph 图定义 + 编译"""
+"""LangGraph 图定义 + 编译 - 大厂标准
+
+核心改进：
+1. 合并工具决策流程
+2. 使用原生 Function Calling
+3. ToolMessage 回传机制
+4. ReAct 循环支持
+"""
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from app.agent.state import AgentState, ChatState
@@ -6,16 +13,17 @@ from app.agent.nodes import (
     agent_node, tool_node, chat_node, error_handler_node,
     route_decision_node, rag_retrieve_node,
     load_history_node, save_message_node,
-    tool_decision_node, tool_execute_node
+    tool_decision_node, tool_execute_node,
+    react_agent_node, react_tool_execute_node
 )
-from app.agent.router import route_agent, route_after_tools, route_error, route_chat, route_tool
+from app.agent.router import route_agent, route_after_tools, route_error, route_chat, route_tool, route_react
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 def create_agent_graph():
-    """创建Agent图
+    """创建Agent图（旧版兼容）
     
     ReAct模式的Agent图
     """
@@ -68,26 +76,24 @@ def create_agent_graph():
 
 
 def create_chat_graph():
-    """创建聊天图 -（标准 Agent 图模式）
-
+    """创建聊天图 - 大厂标准
+    
     完整流程：
-    1. load_history: 加载历史消息和会话信息
-    2. route_decision: 智能路由决策（是否检索知识库）
+    1. load_history: 加载历史消息
+    2. route_decision: 智能路由（Function Calling）
     3. rag_retrieve: RAG 检索（按需）
-    4. tool_decision: 工具决策（是否调用工具）
-    5. tool_execute: 工具执行（按需）
-    6. chat: 生成响应
+    4. tool_decision: 工具决策（直接使用路由结果）
+    5. tool_execute: 工具执行（ToolMessage 回传）
+    6. chat: LLM 整合结果
     7. save_message: 保存消息
-
-    架构优势：
-    - 统一入口，逻辑清晰
-    - 每个节点职责单一
-    - 支持链路追踪
-    - 支持工具调用
-    - 易于扩展和测试
+    
+    核心改进：
+    - 合并工具决策流程
+    - 使用原生 Function Calling
+    - ToolMessage 回传机制
     """
     workflow = StateGraph(ChatState)
-
+    
     # ===== 添加节点 =====
     workflow.add_node("load_history", load_history_node)
     workflow.add_node("route_decision", route_decision_node)
@@ -96,15 +102,14 @@ def create_chat_graph():
     workflow.add_node("tool_execute", tool_execute_node)
     workflow.add_node("chat", chat_node)
     workflow.add_node("save_message", save_message_node)
-
+    
     # ===== 设置入口 =====
     workflow.set_entry_point("load_history")
-
+    
     # ===== 添加边 =====
-    # load_history -> route_decision
     workflow.add_edge("load_history", "route_decision")
-
-    # route_decision -> rag_retrieve 或 tool_decision（条件边）
+    
+    # route_decision -> rag_retrieve 或 tool_decision
     workflow.add_conditional_edges(
         "route_decision",
         route_chat,
@@ -113,11 +118,10 @@ def create_chat_graph():
             "chat": "tool_decision"
         }
     )
-
-    # rag_retrieve -> tool_decision
+    
     workflow.add_edge("rag_retrieve", "tool_decision")
-
-    # tool_decision -> tool_execute 或 chat（条件边）
+    
+    # tool_decision -> tool_execute 或 chat
     workflow.add_conditional_edges(
         "tool_decision",
         route_tool,
@@ -126,27 +130,79 @@ def create_chat_graph():
             "chat": "chat"
         }
     )
-
-    # tool_execute -> chat
+    
     workflow.add_edge("tool_execute", "chat")
-
-    # chat -> save_message
     workflow.add_edge("chat", "save_message")
-
-    # save_message -> END
     workflow.add_edge("save_message", END)
-
+    
     # ===== 编译 =====
     checkpointer = MemorySaver()
     app = workflow.compile(checkpointer=checkpointer)
+    
+    logger.info("Chat graph compiled (大厂标准: Function Calling + ToolMessage)")
+    return app
 
-    logger.info("Chat graph compiled (production mode with tools support)")
+
+def create_react_graph():
+    """创建 ReAct 循环图 - 大厂标准
+    
+    ReAct 循环流程：
+    1. load_history: 加载历史消息
+    2. react_agent: LLM 决策（bind_tools）
+    3. react_tool_execute: 执行工具（ToolMessage 回传）
+    4. 循环: react_agent -> react_tool_execute -> react_agent
+    5. chat: 最终回答
+    6. save_message: 保存消息
+    
+    大厂标准：
+    - OpenAI: ReAct + Function Calling
+    - Google: Agent 循环 + 工具执行
+    - 阿里: 多轮对话 + 工具编排
+    """
+    workflow = StateGraph(ChatState)
+    
+    # ===== 添加节点 =====
+    workflow.add_node("load_history", load_history_node)
+    workflow.add_node("react_agent", react_agent_node)
+    workflow.add_node("react_tool_execute", react_tool_execute_node)
+    workflow.add_node("chat", chat_node)
+    workflow.add_node("save_message", save_message_node)
+    
+    # ===== 设置入口 =====
+    workflow.set_entry_point("load_history")
+    
+    # ===== 添加边 =====
+    workflow.add_edge("load_history", "react_agent")
+    
+    # react_agent -> react_tool_execute 或 chat（条件边）
+    workflow.add_conditional_edges(
+        "react_agent",
+        route_react,
+        {
+            "tool": "react_tool_execute",
+            "chat": "chat",
+            "end": END  # 达到最大轮次
+        }
+    )
+    
+    # react_tool_execute -> react_agent（循环）
+    workflow.add_edge("react_tool_execute", "react_agent")
+    
+    workflow.add_edge("chat", "save_message")
+    workflow.add_edge("save_message", END)
+    
+    # ===== 编译 =====
+    checkpointer = MemorySaver()
+    app = workflow.compile(checkpointer=checkpointer)
+    
+    logger.info("ReAct graph compiled (大厂标准: 多轮工具调用)")
     return app
 
 
 # 全局图实例
 _agent_app = None
 _chat_app = None
+_react_app = None
 
 
 def get_agent_app():
@@ -163,3 +219,11 @@ def get_chat_app():
     if _chat_app is None:
         _chat_app = create_chat_graph()
     return _chat_app
+
+
+def get_react_app():
+    """获取 ReAct 应用"""
+    global _react_app
+    if _react_app is None:
+        _react_app = create_react_graph()
+    return _react_app

@@ -1,10 +1,12 @@
-"""长期记忆 - PGVector"""
+"""长期记忆 - Qdrant 向量存储"""
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from app.db import get_async_session
 from app.config import get_settings
 from app.core.logger import get_logger
+from app.embeddings.qdrant_store import QdrantVectorStore
+from app.embeddings.zhipu_embedding import get_embedding_model
 import json
 
 logger = get_logger(__name__)
@@ -14,13 +16,21 @@ settings = get_settings()
 class LongTermMemory:
     """长期记忆
     
-    使用PostgreSQL + PGVector存储长期记忆，支持向量检索
+    使用 Qdrant 向量数据库存储长期记忆，支持向量检索和语义搜索。
+    
+    大厂实践：
+    - OpenAI：向量存储关键事实
+    - Google MemGPT：语义检索记忆
+    - 阿里通义：Qdrant 向量存储
     """
     
     def __init__(self, session_id: str, db: AsyncSession):
         self.session_id = session_id
         self.db = db
         self.limit = settings.MEMORY_LONG_TERM_LIMIT
+        self.qdrant = QdrantVectorStore()
+        self.embedding_model = get_embedding_model()
+        self.collection_name = f"memory_{session_id}"
     
     async def add_memory(
         self,

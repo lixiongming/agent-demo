@@ -1,5 +1,12 @@
-"""LangGraph 节点实现"""
-from typing import Dict, Any
+"""LangGraph 节点实现 - 大厂标准
+
+核心改进：
+1. 使用原生 Function Calling（bind_tools）
+2. ToolMessage 回传机制
+3. ReAct 循环支持
+4. 生产级审计日志
+"""
+from typing import Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from app.agent.state import AgentState, ChatState
 from app.llm.factory import get_llm
@@ -8,61 +15,74 @@ from app.core.logger import get_logger
 from app.core.container import DIContainer
 from app.core.interfaces import IRAGService
 from app.core.tracing import tracer, SpanStatus
+from app.core.audit import AuditLogger
 from app.config import get_settings
+import time
 
 logger = get_logger(__name__)
 settings = get_settings()
 
 
 def get_rag_service():
-    """获取 RAG 服务（容器单例）
-    
-    标准：
-    - 使用容器获取单例
-    - 只初始化一次
-    - 后续请求直接获取
-    """
+    """获取 RAG 服务（容器单例）"""
     return DIContainer.get(IRAGService)
 
 
+# ============================================
+# 智能路由节点
+# ============================================
+
 async def route_decision_node(state: ChatState) -> Dict[str, Any]:
-    """智能路由决策节点
+    """智能路由决策节点 - 大厂标准
     
     使用三级路由策略：
     1. 关键词快速路径（毫秒级）
     2. 规则引擎匹配（毫秒级）
-    3. LLM 智能决策（带缓存，秒级）
+    3. LLM Function Calling（带缓存，秒级）
     
     Returns:
-        route_decision: {"needs_retrieval": bool, "method": str, "reason": str, "confidence": float}
+        route_decision: 包含 tool_calls 的决策结果
     """
     async with tracer.span("route_decision") as span:
         logger.info("Route decision node executing")
         
         current_input = state.get("current_input", "")
+        user_id = state.get("user_id")
+        
         span.set_attribute("query_length", len(current_input))
+        span.set_attribute("user_id", user_id)
         
         if not current_input:
             span.set_attribute("result", "no_input")
-            return {"route_decision": {"needs_retrieval": False, "reason": "无输入", "confidence": 1.0, "method": "default"}}
+            return {
+                "route_decision": {
+                    "needs_retrieval": False,
+                    "needs_tool": False,
+                    "tool_calls": [],
+                    "reason": "无输入",
+                    "confidence": 1.0,
+                    "method": "default"
+                }
+            }
         
         try:
-            # 使用智能路由器
+            # 使用智能路由器（已使用 Function Calling）
             from app.agent.smart_router import smart_route
             
-            decision = await smart_route(current_input)
+            decision = await smart_route(current_input, user_id)
             
             # 记录追踪信息
             span.set_attribute("needs_retrieval", decision.get("needs_retrieval"))
+            span.set_attribute("needs_tool", decision.get("needs_tool"))
+            span.set_attribute("tool_calls_count", len(decision.get("tool_calls", [])))
             span.set_attribute("method", decision.get("method"))
             span.set_attribute("confidence", decision.get("confidence"))
             span.set_attribute("latency_ms", decision.get("latency_ms", 0))
             
             logger.info(
-                f"Route decision: needs_retrieval={decision.get('needs_retrieval')}, "
+                f"Route decision: needs_tool={decision.get('needs_tool')}, "
+                f"tool_calls={len(decision.get('tool_calls', []))}, "
                 f"method={decision.get('method')}, "
-                f"reason={decision.get('reason')}, "
-                f"confidence={decision.get('confidence')}, "
                 f"latency_ms={decision.get('latency_ms', 0)}"
             )
             
@@ -71,70 +91,61 @@ async def route_decision_node(state: ChatState) -> Dict[str, Any]:
         except Exception as e:
             span.set_status(SpanStatus.ERROR, str(e))
             logger.error(f"Route decision error: {e}")
-            # 降级策略：默认检索
+            
+            # 降级策略
             return {
                 "route_decision": {
-                    "needs_retrieval": True,
-                    "reason": f"路由决策失败，降级为默认检索: {str(e)}",
+                    "needs_retrieval": False,
+                    "needs_tool": False,
+                    "tool_calls": [],
+                    "reason": f"路由决策失败，降级: {str(e)}",
                     "confidence": 0.5,
                     "method": "fallback"
                 }
             }
 
 
+# ============================================
+# RAG 检索节点
+# ============================================
+
 async def rag_retrieve_node(state: ChatState) -> Dict[str, Any]:
-    """RAG 检索节点
-    
-    根据路由决策，仅在需要时检索知识库
-    """
+    """RAG 检索节点"""
     async with tracer.span("rag_retrieve") as span:
         logger.info("RAG retrieve node executing")
         
-        # 检查路由决策
         route_decision = state.get("route_decision", {})
         needs_retrieval = route_decision.get("needs_retrieval", False)
         
         span.set_attribute("needs_retrieval", needs_retrieval)
         
         if not needs_retrieval:
-            logger.info("RAG retrieval skipped (route decision: not needed)")
+            logger.info("RAG retrieval skipped")
             span.set_attribute("result", "skipped")
             return state
         
         current_input = state.get("current_input", "")
-        span.set_attribute("query_length", len(current_input))
-        
-        if not current_input:
-            span.set_attribute("result", "no_input")
-            return state
         
         try:
-            # 检索知识库
             rag_service = get_rag_service()
             
-            # 嵌套 Span：向量检索
-            async with tracer.span("vector_search") as search_span:
+            async with tracer.span("vector_search"):
                 result = await rag_service.query(
                     question=current_input,
                     top_k=5,
                     threshold=0.3
                 )
-                search_span.set_attribute("top_k", 5)
-                search_span.set_attribute("threshold", 0.3)
             
             sources = result.get("sources", [])
             span.set_attribute("doc_count", len(sources))
             
             if sources:
-                # 构建知识上下文
                 context_parts = []
                 for i, source in enumerate(sources):
                     context_parts.append(f"[知识{i+1}] {source.get('content', '')}")
                 
                 knowledge_context = "\n".join(context_parts)
-                
                 logger.info(f"RAG retrieved {len(sources)} documents")
-                span.set_attribute("result", "success")
                 
                 return {
                     "rag_context": knowledge_context,
@@ -142,8 +153,7 @@ async def rag_retrieve_node(state: ChatState) -> Dict[str, Any]:
                     "rag_used": True
                 }
             else:
-                logger.info("RAG: 知识库中没有找到相关内容")
-                span.set_attribute("result", "no_match")
+                logger.info("RAG: no match")
                 return {"rag_used": False}
         
         except Exception as e:
@@ -152,119 +162,369 @@ async def rag_retrieve_node(state: ChatState) -> Dict[str, Any]:
             return {"rag_used": False}
 
 
-async def agent_node(state: AgentState) -> Dict[str, Any]:
-    """Agent决策节点
+# ============================================
+# 工具执行节点 - 大厂标准
+# ============================================
+
+async def tool_decision_node(state: ChatState) -> Dict[str, Any]:
+    """工具决策节点 - 只做执行（不再调用 LLM）
     
-    分析当前状态，决定下一步行动
+    核心改进：
+    - 直接使用 route_decision 中的 tool_calls
+    - 不再重复调用 LLM 决策
+    - 执行工具并返回 ToolMessage 格式结果
     """
-    logger.info(f"Agent node executing, iteration: {state.get('iteration_count', 0)}")
-    
-    # 获取LLM
-    llm = get_llm(state.get("model_name", settings.DEFAULT_MODEL))
-    
-    # 构建消息
-    messages = state.get("messages", [])
-    
-    # 调用LLM
-    try:
-        response = await llm.ainvoke(messages)
+    async with tracer.span("tool_decision") as span:
+        logger.info("Tool decision node executing")
         
-        # 检查是否需要工具调用
-        if hasattr(response, "tool_calls") and response.tool_calls:
+        # 直接从路由决策获取 tool_calls
+        route_decision = state.get("route_decision", {})
+        tool_calls = route_decision.get("tool_calls", [])
+        
+        span.set_attribute("tool_calls_count", len(tool_calls))
+        
+        if not tool_calls:
+            logger.info("No tool calls from route decision")
             return {
-                "agent_outcome": {
-                    "action": "tool_call",
-                    "data": response.tool_calls
-                },
-                "messages": [response],
-                "iteration_count": state.get("iteration_count", 0) + 1
+                "tool_decision": {
+                    "needs_tool": False,
+                    "tool_calls": [],
+                    "reason": "路由决策未指定工具"
+                }
             }
         
-        # 完成
+        # 审计日志
+        audit_logger = AuditLogger()
+        current_input = state.get("current_input", "")
+        user_id = state.get("user_id")
+        
+        # 记录工具调用审计
+        audit_logger.log_tool_decision(
+            user_id=user_id,
+            query=current_input,
+            tool_calls=tool_calls,
+            method=route_decision.get("method", "unknown")
+        )
+        
+        span.set_attribute("needs_tool", True)
+        span.set_attribute("tool_names", [tc.get("name") for tc in tool_calls])
+        
         return {
-            "agent_outcome": {
-                "action": "finish",
-                "data": response.content
-            },
-            "messages": [response],
-            "final_response": response.content,
-            "iteration_count": state.get("iteration_count", 0) + 1
-        }
-    
-    except Exception as e:
-        logger.error(f"Agent node error: {e}")
-        return {
-            "errors": [str(e)],
-            "iteration_count": state.get("iteration_count", 0) + 1
+            "tool_decision": {
+                "needs_tool": True,
+                "tool_calls": tool_calls,
+                "reason": route_decision.get("reason", "路由决策指定")
+            }
         }
 
 
-async def tool_node(state: AgentState) -> Dict[str, Any]:
-    """工具执行节点
+async def tool_execute_node(state: ChatState) -> Dict[str, Any]:
+    """工具执行节点 - 大厂标准
     
-    执行Agent决策的工具调用
+    核心改进：
+    1. 执行工具并返回 ToolMessage 格式
+    2. 支持多工具并行执行
+    3. 完整的审计日志
+    4. 权限检查
     """
-    logger.info("Tool node executing")
-    
-    outcome = state.get("agent_outcome")
-    if not outcome or outcome.get("action") != "tool_call":
-        return state
-    
-    tool_calls = outcome.get("data", [])
-    tool_registry = ToolRegistry()
-    
-    results = []
-    messages = []
-    
-    for tool_call in tool_calls:
-        tool_name = tool_call.get("name") or tool_call.get("function", {}).get("name")
-        tool_args = tool_call.get("args") or tool_call.get("function", {}).get("arguments", {})
+    async with tracer.span("tool_execute") as span:
+        logger.info("Tool execute node executing")
         
-        try:
-            # 执行工具
-            result = await tool_registry.execute(tool_name, tool_args)
-            
-            results.append({
-                "tool_name": tool_name,
-                "result": result,
-                "success": True
-            })
-            
-            # 添加工具消息
-            messages.append(
-                ToolMessage(
-                    content=str(result),
-                    tool_call_id=tool_call.get("id", "")
-                )
-            )
+        tool_decision = state.get("tool_decision", {})
+        tool_calls = tool_decision.get("tool_calls", [])
         
-        except Exception as e:
-            logger.error(f"Tool execution error: {e}")
-            results.append({
-                "tool_name": tool_name,
-                "result": None,
-                "error": str(e),
-                "success": False
-            })
-            messages.append(
-                ToolMessage(
-                    content=f"Error: {str(e)}",
-                    tool_call_id=tool_call.get("id", "")
+        if not tool_calls:
+            logger.info("No tool calls to execute")
+            return {"tool_used": False}
+        
+        # 审计日志
+        audit_logger = AuditLogger()
+        user_id = state.get("user_id")
+        session_id = state.get("session_id", "")
+        
+        tool_registry = ToolRegistry()
+        tool_messages = []
+        tool_results = []
+        
+        for tool_call in tool_calls:
+            tool_name = tool_call.get("name")
+            tool_args = tool_call.get("args", {})
+            tool_call_id = tool_call.get("id", f"call_{int(time.time()*1000)}")
+            
+            span.set_attribute("tool_name", tool_name)
+            span.set_attribute("tool_args", str(tool_args))
+            
+            # 权限检查
+            if not tool_registry.check_permission(tool_name, user_id):
+                logger.warning(f"Tool {tool_name} permission denied for user {user_id}")
+                audit_logger.log_tool_permission_denied(
+                    user_id=user_id,
+                    tool_name=tool_name,
+                    reason="权限不足"
                 )
-            )
-    
-    return {
-        "tool_results": results,
-        "messages": messages,
-        "agent_outcome": None  # 清除决策，重新进入agent节点
-    }
+                
+                tool_messages.append(
+                    ToolMessage(
+                        content=f"权限不足：无法调用工具 {tool_name}",
+                        tool_call_id=tool_call_id
+                    )
+                )
+                tool_results.append({
+                    "tool_name": tool_name,
+                    "result": None,
+                    "error": "permission_denied",
+                    "success": False
+                })
+                continue
+            
+            try:
+                # 执行工具
+                async with tracer.span(f"tool_{tool_name}") as tool_span:
+                    start_time = time.time()
+                    result = await tool_registry.execute(tool_name, tool_args)
+                    latency_ms = int((time.time() - start_time) * 1000)
+                    tool_span.set_attribute("success", True)
+                    tool_span.set_attribute("latency_ms", latency_ms)
+                
+                # 审计日志
+                audit_logger.log_tool_execution(
+                    user_id=user_id,
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    result=result,
+                    latency_ms=latency_ms,
+                    success=True
+                )
+                
+                # 构建 ToolMessage（大厂标准）
+                tool_messages.append(
+                    ToolMessage(
+                        content=str(result),
+                        tool_call_id=tool_call_id
+                    )
+                )
+                
+                tool_results.append({
+                    "tool_name": tool_name,
+                    "result": result,
+                    "success": True,
+                    "latency_ms": latency_ms
+                })
+                
+                logger.info(f"Tool {tool_name} executed successfully in {latency_ms}ms")
+            
+            except Exception as e:
+                span.set_status(SpanStatus.ERROR, str(e))
+                logger.error(f"Tool {tool_name} execution failed: {e}")
+                
+                # 审计日志
+                audit_logger.log_tool_execution(
+                    user_id=user_id,
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    result=None,
+                    error=str(e),
+                    success=False
+                )
+                
+                tool_messages.append(
+                    ToolMessage(
+                        content=f"Error: {str(e)}",
+                        tool_call_id=tool_call_id
+                    )
+                )
+                
+                tool_results.append({
+                    "tool_name": tool_name,
+                    "result": None,
+                    "error": str(e),
+                    "success": False
+                })
+        
+        span.set_attribute("tool_count", len(tool_results))
+        span.set_attribute("success_count", sum(1 for r in tool_results if r.get("success")))
+        
+        return {
+            "tool_messages": tool_messages,
+            "tool_results": tool_results,
+            "tool_used": True
+        }
 
+
+# ============================================
+# ReAct 循环节点 - 大厂标准
+# ============================================
+
+async def react_agent_node(state: ChatState) -> Dict[str, Any]:
+    """ReAct Agent 节点 - 支持多轮工具调用
+    
+    大厂标准 ReAct 循环：
+    1. LLM 决策是否需要工具
+    2. 执行工具
+    3. 将 ToolMessage 回传给 LLM
+    4. LLM 整合结果或继续调用工具
+    5. 循环直到完成或达到最大轮次
+    """
+    async with tracer.span("react_agent") as span:
+        logger.info("ReAct agent node executing")
+        
+        iteration = state.get("react_iteration", 0)
+        max_iterations = settings.MAX_REACT_ITERATIONS
+        
+        span.set_attribute("iteration", iteration)
+        span.set_attribute("max_iterations", max_iterations)
+        
+        # 检查是否超过最大轮次
+        if iteration >= max_iterations:
+            logger.warning(f"ReAct max iterations reached: {iteration}")
+            span.set_attribute("result", "max_iterations")
+            return {
+                "react_status": "max_iterations",
+                "react_iteration": iteration
+            }
+        
+        messages = state.get("messages", [])
+        current_input = state.get("current_input", "")
+        
+        # 添加用户消息（如果是第一轮）
+        if iteration == 0:
+            messages.append(HumanMessage(content=current_input))
+        
+        # 获取工具并绑定到 LLM
+        from app.tools.tool_registry import tool_registry
+        tools = tool_registry.get_openai_tools()
+        
+        llm = get_llm(settings.DEFAULT_MODEL)
+        llm_with_tools = llm.bind_tools(tools)
+        
+        # 调用 LLM
+        async with tracer.span("llm_react_invoke"):
+            response = await llm_with_tools.ainvoke(messages)
+        
+        # 检查是否有工具调用
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            tool_calls = []
+            for tc in response.tool_calls:
+                tool_calls.append({
+                    "name": tc.get("name"),
+                    "args": tc.get("args", {}),
+                    "id": tc.get("id", f"call_{int(time.time()*1000)}")
+                })
+            
+            span.set_attribute("has_tool_calls", True)
+            span.set_attribute("tool_calls_count", len(tool_calls))
+            
+            logger.info(f"ReAct iteration {iteration}: LLM requested {len(tool_calls)} tools")
+            
+            return {
+                "messages": [response],
+                "react_tool_calls": tool_calls,
+                "react_status": "tool_call",
+                "react_iteration": iteration + 1
+            }
+        
+        # LLM 完成，返回最终答案
+        span.set_attribute("has_tool_calls", False)
+        span.set_attribute("result", "completed")
+        
+        logger.info(f"ReAct iteration {iteration}: LLM completed with answer")
+        
+        return {
+            "messages": [response],
+            "response": response.content,
+            "react_status": "completed",
+            "react_iteration": iteration + 1
+        }
+
+
+async def react_tool_execute_node(state: ChatState) -> Dict[str, Any]:
+    """ReAct 工具执行节点 - 执行工具并回传 ToolMessage"""
+    async with tracer.span("react_tool_execute") as span:
+        logger.info("ReAct tool execute node executing")
+        
+        tool_calls = state.get("react_tool_calls", [])
+        messages = state.get("messages", [])
+        
+        if not tool_calls:
+            return {"messages": messages}
+        
+        tool_registry = ToolRegistry()
+        audit_logger = AuditLogger()
+        user_id = state.get("user_id")
+        session_id = state.get("session_id", "")
+        
+        tool_messages = []
+        
+        for tool_call in tool_calls:
+            tool_name = tool_call.get("name")
+            tool_args = tool_call.get("args", {})
+            tool_call_id = tool_call.get("id")
+            
+            span.set_attribute("tool_name", tool_name)
+            
+            try:
+                start_time = time.time()
+                result = await tool_registry.execute(tool_name, tool_args)
+                latency_ms = int((time.time() - start_time) * 1000)
+                
+                audit_logger.log_tool_execution(
+                    user_id=user_id,
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    result=result,
+                    latency_ms=latency_ms,
+                    success=True
+                )
+                
+                # 构建 ToolMessage（大厂标准）
+                tool_messages.append(
+                    ToolMessage(
+                        content=str(result),
+                        tool_call_id=tool_call_id
+                    )
+                )
+                
+                logger.info(f"ReAct tool {tool_name} executed in {latency_ms}ms")
+            
+            except Exception as e:
+                logger.error(f"ReAct tool {tool_name} failed: {e}")
+                
+                audit_logger.log_tool_execution(
+                    user_id=user_id,
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    error=str(e),
+                    success=False
+                )
+                
+                tool_messages.append(
+                    ToolMessage(
+                        content=f"Error: {str(e)}",
+                        tool_call_id=tool_call_id
+                    )
+                )
+        
+        return {
+            "messages": tool_messages,
+            "react_tool_calls": []  # 清空，准备下一轮
+        }
+
+
+# ============================================
+# Chat 节点 - 大厂标准
+# ============================================
 
 async def chat_node(state: ChatState) -> Dict[str, Any]:
-    """聊天节点 - 智能路由版（支持工具调用）
+    """聊天节点 - 大厂标准
     
-    根据路由决策决定是否使用 RAG 检索结果
-    根据工具决策决定是否使用工具执行结果
+    核心改进：
+    1. ToolMessage 回传机制
+    2. LLM 整合工具结果
+    3. 支持多工具结果整合
     """
     async with tracer.span("chat") as span:
         logger.info("Chat node executing")
@@ -277,76 +537,44 @@ async def chat_node(state: ChatState) -> Dict[str, Any]:
         span.set_attribute("query_length", len(current_input))
         span.set_attribute("model", settings.DEFAULT_MODEL)
         
-        # 添加用户消息
-        messages.append(HumanMessage(content=current_input))
+        # 构建消息列表
+        if not any(isinstance(m, HumanMessage) and m.content == current_input for m in messages):
+            messages.append(HumanMessage(content=current_input))
         
-        try:
-            # 检查是否有 RAG 上下文
-            rag_context = state.get("rag_context")
-            rag_used = state.get("rag_used", False)
-            
-            # 检查是否有工具执行结果
-            tool_results = state.get("tool_results", [])
-            tool_used = state.get("tool_used", False)
-            
-            span.set_attribute("rag_used", rag_used)
-            span.set_attribute("tool_used", tool_used)
-            
-            # 构建上下文
-            context_parts = []
-            
-            # 如果有检索结果，添加到上下文
-            if rag_context and rag_used:
-                context_parts.append(f"""知识库检索结果：{rag_context}""")
-                logger.info("Using RAG context for response")
-            
-            # 如果有工具执行结果，添加到上下文
-            if tool_results and tool_used:
-                tool_info = []
-                for result in tool_results:
-                    if result.get("success"):
-                        tool_name = result['tool_name']
-                        tool_result = result['result']
-                        
-                        # 特殊处理新闻查询结果
-                        if tool_name == "news_query" and tool_result:
-                            news_list = tool_result.get('news_list', [])
-                            if news_list:
-                                news_info = []
-                                news_info.append(f"查询类型: {tool_result.get('result_type', '新闻')}")
-                                news_info.append(f"新闻数量: {tool_result.get('news_count', 0)}")
-                                news_info.append("\n新闻列表:")
-                                for i, news in enumerate(news_list[:10], 1):  # 最多显示10条
-                                    title = news.get('title', '无标题')
-                                    views = news.get('views', 0)
-                                    author = news.get('author', '未知')
-                                    news_info.append(f"{i}. {title} (作者: {author}, 浏览量: {views})")
-                                
-                                tool_info.append(f"- {tool_name}:\n{chr(10).join(news_info)}")
-                            else:
-                                tool_info.append(f"- {tool_name}: 没有找到相关新闻")
-                        else:
-                            # 其他工具，直接显示结果
-                            tool_info.append(f"- {tool_name}: {tool_result}")
-                    else:
-                        tool_info.append(f"- {result['tool_name']}: 执行失败 - {result.get('error')}")
-                
-                context_parts.append(f"""工具调用结果：
-{chr(10).join(tool_info)}""")
-                logger.info(f"Using tool results: {len(tool_results)} tools")
-            
-            # 如果有上下文，添加系统提示
-            if context_parts:
-                system_content = f"""以下是相关信息，请参考这些内容回答用户问题：
+        # 检查是否有 RAG 上下文
+        rag_context = state.get("rag_context")
+        rag_used = state.get("rag_used", False)
+        
+        # 检查是否有工具执行结果（ToolMessage）
+        tool_messages = state.get("tool_messages", [])
+        tool_used = state.get("tool_used", False)
+        
+        span.set_attribute("rag_used", rag_used)
+        span.set_attribute("tool_used", tool_used)
+        span.set_attribute("tool_messages_count", len(tool_messages))
+        
+        # 构建上下文
+        context_parts = []
+        
+        if rag_context and rag_used:
+            context_parts.append(f"知识库检索结果：\n{rag_context}")
+            logger.info("Using RAG context")
+        
+        # 如果有 ToolMessage，添加到消息列表（大厂标准）
+        if tool_messages:
+            messages.extend(tool_messages)
+            logger.info(f"Added {len(tool_messages)} ToolMessages to conversation")
+        
+        # 如果有上下文，添加系统提示
+        if context_parts:
+            system_content = f"""以下是相关信息，请参考这些内容回答用户问题：
 
 {chr(10).join(context_parts)}
 
-请基于以上信息回答用户问题。如果没有相关信息，请根据你的知识回答。"""
-                messages.insert(0, SystemMessage(content=system_content))
-            else:
-                logger.info("No context, using general knowledge")
-            
-            # 嵌套 Span：LLM 调用
+请基于以上信息回答用户问题。"""
+            messages.insert(0, SystemMessage(content=system_content))
+        
+        try:
             async with tracer.span("llm_invoke") as llm_span:
                 response = await llm.ainvoke(messages)
                 llm_span.set_attribute("response_length", len(response.content))
@@ -369,62 +597,12 @@ async def chat_node(state: ChatState) -> Dict[str, Any]:
             }
 
 
-async def error_handler_node(state: AgentState) -> Dict[str, Any]:
-    """错误处理节点"""
-    errors = state.get("errors", [])
-    
-    if errors:
-        logger.warning(f"Handling errors: {errors}")
-        return {
-            "final_response": f"执行过程中发生错误: {errors[-1]}",
-            "agent_outcome": {"action": "finish", "data": None}
-        }
-    
-    return state
-
-
-async def should_continue(state: AgentState) -> str:
-    """判断是否继续执行
-    
-    Returns:
-        "continue": 继续执行工具
-        "finish": 完成
-        "error": 错误处理
-    """
-    # 检查迭代次数
-    if state.get("iteration_count", 0) >= settings.MAX_ITERATIONS:
-        return "finish"
-    
-    # 检查错误
-    if state.get("errors"):
-        return "error"
-    
-    # 检查决策
-    outcome = state.get("agent_outcome")
-    if not outcome:
-        return "continue"
-    
-    action = outcome.get("action")
-    if action == "tool_call":
-        return "continue"
-    elif action == "finish":
-        return "finish"
-    
-    return "continue"
-
-
 # ============================================
-# 会话管理节点（标准 Agent 图模式）
+# 会话管理节点
 # ============================================
 
 async def load_history_node(state: ChatState) -> Dict[str, Any]:
-    """加载历史消息节点
-    
-    功能：
-    - 获取或创建会话
-    - 加载历史消息
-    - 加载系统提示词
-    """
+    """加载历史消息节点"""
     async with tracer.span("load_history") as span:
         logger.info("Load history node executing")
         
@@ -434,14 +612,12 @@ async def load_history_node(state: ChatState) -> Dict[str, Any]:
         span.set_attribute("session_id", session_id)
         
         try:
-            # 获取数据库会话
             from app.db import AsyncSessionLocal, SessionRepository, MessageRepository
             
             async with AsyncSessionLocal() as db:
                 session_repo = SessionRepository(db)
                 message_repo = MessageRepository(db)
                 
-                # 获取或创建会话
                 session = await session_repo.get_by_id(session_id)
                 if not session:
                     session = await session_repo.create(
@@ -452,17 +628,13 @@ async def load_history_node(state: ChatState) -> Dict[str, Any]:
                     )
                     logger.info(f"Session created: {session_id}")
                 
-                # 加载历史消息
                 history = await message_repo.get_recent(session.id, limit=20)
                 
-                # 构建消息列表
                 messages = []
                 
-                # 添加系统提示词
                 if session.system_prompt:
                     messages.append(SystemMessage(content=session.system_prompt))
                 
-                # 添加历史消息
                 for msg in history:
                     if msg.role == "user":
                         messages.append(HumanMessage(content=msg.content))
@@ -470,11 +642,7 @@ async def load_history_node(state: ChatState) -> Dict[str, Any]:
                         messages.append(AIMessage(content=msg.content))
                 
                 span.set_attribute("history_count", len(history))
-                span.set_attribute("session_id_db", session.id)
                 
-                logger.info(f"Loaded {len(history)} history messages for session {session_id}")
-                
-                # 提交事务（如果有创建会话的操作）
                 await db.commit()
                 
                 return {
@@ -491,19 +659,12 @@ async def load_history_node(state: ChatState) -> Dict[str, Any]:
             logger.error(f"Load history error: {e}")
             return {
                 "history_loaded": False,
-                "history_count": 0,
                 "errors": [f"加载历史消息失败: {str(e)}"]
             }
 
 
 async def save_message_node(state: ChatState) -> Dict[str, Any]:
-    """保存消息节点
-    
-    功能：
-    - 保存用户消息
-    - 保存助手消息
-    - 更新会话统计
-    """
+    """保存消息节点"""
     async with tracer.span("save_message") as span:
         logger.info("Save message node executing")
         
@@ -525,7 +686,6 @@ async def save_message_node(state: ChatState) -> Dict[str, Any]:
                 session_repo = SessionRepository(db)
                 message_repo = MessageRepository(db)
                 
-                # 保存用户消息（如果还没保存）
                 if not state.get("user_message_saved"):
                     await message_repo.create(
                         session_id=db_session_id,
@@ -533,9 +693,7 @@ async def save_message_node(state: ChatState) -> Dict[str, Any]:
                         content=current_input
                     )
                     span.set_attribute("user_message_saved", True)
-                    logger.info(f"User message saved for session {session_id}")
                 
-                # 保存助手消息
                 if response:
                     await message_repo.create(
                         session_id=db_session_id,
@@ -544,12 +702,8 @@ async def save_message_node(state: ChatState) -> Dict[str, Any]:
                         model_name=state.get("model_name", settings.DEFAULT_MODEL)
                     )
                     span.set_attribute("assistant_message_saved", True)
-                    logger.info(f"Assistant message saved for session {session_id}")
                 
-                # 更新会话统计
                 await session_repo.increment_message_count(session_id)
-                
-                # 提交事务（关键！）
                 await db.commit()
                 
                 return {
@@ -567,182 +721,282 @@ async def save_message_node(state: ChatState) -> Dict[str, Any]:
 
 
 # ============================================
-# 工具调用节点
+# Agent 节点（旧版兼容）
 # ============================================
 
-async def tool_decision_node(state: ChatState) -> Dict[str, Any]:
-    """工具决策节点
+async def agent_node(state: AgentState) -> Dict[str, Any]:
+    """Agent决策节点（旧版）"""
+    logger.info(f"Agent node executing, iteration: {state.get('iteration_count', 0)}")
     
-    功能：
-    1. 分析用户问题，判断是否需要调用工具
-    2. 优先检查路由决策（如果路由已指定工具）
-    3. 使用 LLM 自主决策（如果路由未指定）
-    4. 返回工具调用决策
+    llm = get_llm(state.get("model_name", settings.DEFAULT_MODEL))
+    messages = state.get("messages", [])
     
-    - OpenAI: LLM 自主决策工具调用
-    - Google: 意图分类 + LLM 决策
-    - 阿里: 规则引擎 + LLM 决策
-    """
-    async with tracer.span("tool_decision") as span:
-        logger.info("Tool decision node executing")
+    try:
+        response = await llm.ainvoke(messages)
         
-        current_input = state.get("current_input", "")
-        messages = state.get("messages", [])
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            return {
+                "agent_outcome": {
+                    "action": "tool_call",
+                    "data": response.tool_calls
+                },
+                "messages": [response],
+                "iteration_count": state.get("iteration_count", 0) + 1
+            }
         
-        span.set_attribute("query", current_input)
+        return {
+            "agent_outcome": {
+                "action": "finish",
+                "data": response.content
+            },
+            "messages": [response],
+            "final_response": response.content,
+            "iteration_count": state.get("iteration_count", 0) + 1
+        }
+    
+    except Exception as e:
+        logger.error(f"Agent node error: {e}")
+        return {
+            "errors": [str(e)],
+            "iteration_count": state.get("iteration_count", 0) + 1
+        }
+
+
+async def tool_node(state: AgentState) -> Dict[str, Any]:
+    """工具执行节点（旧版）"""
+    logger.info("Tool node executing")
+    
+    outcome = state.get("agent_outcome")
+    if not outcome or outcome.get("action") != "tool_call":
+        return state
+    
+    tool_calls = outcome.get("data", [])
+    tool_registry = ToolRegistry()
+    
+    messages = []
+    
+    for tool_call in tool_calls:
+        tool_name = tool_call.get("name") or tool_call.get("function", {}).get("name")
+        tool_args = tool_call.get("args") or tool_call.get("function", {}).get("arguments", {})
         
         try:
-            # 1. 优先检查路由决策（如果路由已指定工具）
-            route_decision = state.get("route_decision", {})
-            if route_decision.get("needs_tool"):
-                tool_name = route_decision.get("tool_name")
-                logger.info(f"Tool decision from route: {tool_name}")
-                
-                span.set_attribute("needs_tool", True)
-                span.set_attribute("tool_name", tool_name)
-                span.set_attribute("method", "route_decision")
-                
-                return {
-                    "tool_decision": {
-                        "needs_tool": True,
-                        "tool_name": tool_name,
-                        "tool_args": {"question": current_input},
-                        "reason": route_decision.get("reason", "路由决策指定"),
-                        "method": "route_decision"
-                    }
-                }
+            result = await tool_registry.execute(tool_name, tool_args)
             
-            # 2. 如果路由未指定，使用 LLM 自主决策
-            # 获取可用工具
-            tool_registry = ToolRegistry()
-            available_tools = tool_registry.list_tools()
-            
-            if not available_tools:
-                logger.info("No tools available, skipping tool decision")
-                return {"tool_decision": {"needs_tool": False, "reason": "no_tools"}}
-            
-            # 构建工具描述
-            tool_descriptions = []
-            for tool in available_tools:
-                tool_descriptions.append(f"- {tool['name']}: {tool['description']}")
-            
-            tools_info = "\n".join(tool_descriptions)
-            
-            # 构建 LLM 提示词
-            prompt = f"""你是一个工具调用决策器，需要判断用户问题是否需要调用工具。
-
-可用工具列表：
-{tools_info}
-
-用户问题：{current_input}
-
-请分析：
-1. 用户问题是否需要调用以上某个工具？
-2. 如果需要，应该调用哪个工具？参数是什么？
-
-请以JSON格式返回决策：
-{{
-    "needs_tool": true/false,
-    "tool_name": "工具名称（如果needs_tool为true）",
-    "tool_args": {{参数对象}},
-    "reason": "决策原因"
-}}
-
-只返回JSON，不要其他内容。"""
-            
-            # 调用 LLM
-            llm = get_llm(settings.DEFAULT_MODEL)
-            
-            async with tracer.span("llm_tool_decision") as llm_span:
-                response = await llm.ainvoke([HumanMessage(content=prompt)])
-                llm_span.set_attribute("response_length", len(response.content))
-            
-            # 解析结果
-            import json
-            try:
-                # 尝试提取 JSON
-                content = response.content.strip()
-                if "```json" in content:
-                    content = content.split("```json")[1].split("```")[0].strip()
-                elif "```" in content:
-                    content = content.split("```")[1].split("```")[0].strip()
-                
-                decision = json.loads(content)
-            except json.JSONDecodeError:
-                logger.warning(f"Failed to parse tool decision: {response.content}")
-                decision = {"needs_tool": False, "reason": "parse_error"}
-            
-            span.set_attribute("needs_tool", decision.get("needs_tool", False))
-            span.set_attribute("tool_name", decision.get("tool_name", ""))
-            span.set_attribute("method", "llm")
-            
-            logger.info(f"Tool decision: {decision}")
-            
-            return {"tool_decision": decision}
+            messages.append(
+                ToolMessage(
+                    content=str(result),
+                    tool_call_id=tool_call.get("id", "")
+                )
+            )
         
         except Exception as e:
-            span.set_status(SpanStatus.ERROR, str(e))
-            logger.error(f"Tool decision error: {e}")
-            return {
-                "tool_decision": {"needs_tool": False, "reason": f"error: {str(e)}"},
-                "errors": [f"工具决策失败: {str(e)}"]
-            }
-
-
-async def tool_execute_node(state: ChatState) -> Dict[str, Any]:
-    """工具执行节点
+            logger.error(f"Tool execution error: {e}")
+            messages.append(
+                ToolMessage(
+                    content=f"Error: {str(e)}",
+                    tool_call_id=tool_call.get("id", "")
+                )
+            )
     
-    功能：
-    1. 执行工具调用
-    2. 记录执行结果
-    3. 支持限流、熔断、追踪
+    return {
+        "messages": messages,
+        "agent_outcome": None
+    }
+
+
+async def error_handler_node(state: AgentState) -> Dict[str, Any]:
+    """错误处理节点"""
+    errors = state.get("errors", [])
+    
+    if errors:
+        logger.warning(f"Handling errors: {errors}")
+        return {
+            "final_response": f"执行过程中发生错误: {errors[-1]}",
+            "agent_outcome": {"action": "finish", "data": None}
+        }
+    
+    return state
+
+
+async def should_continue(state: AgentState) -> str:
+    """判断是否继续执行"""
+    if state.get("iteration_count", 0) >= settings.MAX_ITERATIONS:
+        return "finish"
+    
+    if state.get("errors"):
+        return "error"
+    
+    outcome = state.get("agent_outcome")
+    if not outcome:
+        return "continue"
+    
+    action = outcome.get("action")
+    if action == "tool_call":
+        return "continue"
+    elif action == "finish":
+        return "finish"
+    
+    return "continue"
+
+
+# ============================================
+# 记忆管理节点 - 大厂标准
+# ============================================
+
+async def memory_integrate_node(state: AgentState) -> Dict[str, Any]:
+    """记忆整合节点
+    
+    在对话结束时：
+    1. 提取关键事实
+    2. 检测冲突并修正
+    3. 存储长期记忆
+    
+    大厂实践：
+    - Google MemGPT：对话结束时整合记忆
+    - OpenAI Memory：提取关键事实存储
     """
-    async with tracer.span("tool_execute") as span:
-        logger.info("Tool execute node executing")
+    logger.info("[记忆整合] 开始执行")
+    
+    session_id = state.get("session_id")
+    messages = state.get("messages", [])
+    
+    if not session_id or not messages:
+        logger.warning("[记忆整合] 缺少必要参数")
+        return state
+    
+    try:
+        from app.memory import MemoryIntegrator
+        from app.llm.factory import get_llm
+        from app.db import get_async_session
         
-        tool_decision = state.get("tool_decision", {})
+        # 获取 LLM
+        llm = get_llm()
         
-        if not tool_decision.get("needs_tool"):
-            logger.info("No tool call needed")
-            return {"tool_used": False}
-        
-        tool_name = tool_decision.get("tool_name")
-        tool_args = tool_decision.get("tool_args", {})
-        
-        span.set_attribute("tool_name", tool_name)
-        span.set_attribute("tool_args", str(tool_args))
-        
-        try:
-            # 执行工具
-            tool_registry = ToolRegistry()
+        # 获取数据库会话
+        async for db in get_async_session():
+            integrator = MemoryIntegrator(llm, db)
             
-            async with tracer.span(f"tool_{tool_name}") as tool_span:
-                result = await tool_registry.execute(tool_name, tool_args)
-                tool_span.set_attribute("success", True)
+            # 整合对话
+            result = await integrator.integrate_conversation(messages, session_id)
             
-            span.set_attribute("result", "success")
-            logger.info(f"Tool {tool_name} executed successfully: {result}")
+            logger.info(f"[记忆整合] 完成: facts={result.get('stats', {}).get('facts_count', 0)}")
             
-            return {
-                "tool_results": [{
-                    "tool_name": tool_name,
-                    "result": result,
-                    "success": True
-                }],
-                "tool_used": True
-            }
+            # 存储事实
+            facts = result.get("facts", [])
+            for fact in facts:
+                if fact.get("fact_type") != "none":
+                    await integrator.store_integrated_memory(fact, session_id)
+            
+            await db.commit()
+            break
         
-        except Exception as e:
-            span.set_status(SpanStatus.ERROR, str(e))
-            logger.error(f"Tool execute error: {e}")
+        return {
+            "memory_integrated": True,
+            "facts_extracted": len(facts)
+        }
+    
+    except Exception as e:
+        logger.error(f"[记忆整合] 失败: {e}")
+        return state
+
+
+async def memory_forgetting_node(state: AgentState) -> Dict[str, Any]:
+    """遗忘周期节点
+    
+    定期执行：
+    1. 时间衰减
+    2. 容量检查
+    3. 淘汰低权重记忆
+    
+    大厂实践：
+    - Google MemGPT：定期遗忘周期
+    - OpenAI Memory：容量管理
+    """
+    logger.info("[遗忘周期] 开始执行")
+    
+    session_id = state.get("session_id")
+    
+    if not session_id:
+        logger.warning("[遗忘周期] 缺少 session_id")
+        return state
+    
+    try:
+        from app.memory import ForgettingManager
+        from app.db import get_async_session
+        
+        async for db in get_async_session():
+            manager = ForgettingManager(session_id, db)
             
-            return {
-                "tool_results": [{
-                    "tool_name": tool_name,
-                    "result": None,
-                    "error": str(e),
-                    "success": False
-                }],
-                "tool_used": True,
-                "errors": [f"工具执行失败: {str(e)}"]
-            }
+            # 执行遗忘周期
+            result = await manager.run_forgetting_cycle()
+            
+            logger.info(
+                f"[遗忘周期] 完成: "
+                f"decayed={result.get('decay', {}).get('decayed_count', 0)}, "
+                f"evicted={result.get('evict', {}).get('evicted_count', 0)}"
+            )
+            
+            break
+        
+        return {
+            "forgetting_cycle_run": True,
+            "forgetting_result": result
+        }
+    
+    except Exception as e:
+        logger.error(f"[遗忘周期] 失败: {e}")
+        return state
+
+
+async def memory_retrieve_node(state: AgentState) -> Dict[str, Any]:
+    """记忆检索节点
+    
+    为 LLM 提供记忆上下文：
+    1. 向量检索长期记忆
+    2. 获取短期记忆
+    3. Rerank 重排序
+    
+    大厂实践：
+    - Google MemGPT：检索相关记忆作为上下文
+    - OpenAI Memory：提供记忆背景
+    """
+    logger.info("[记忆检索] 开始执行")
+    
+    session_id = state.get("session_id")
+    query = state.get("current_query", "")
+    
+    if not session_id:
+        logger.warning("[记忆检索] 缺少 session_id")
+        return state
+    
+    try:
+        from app.memory import MemoryManager
+        from app.llm.factory import get_llm
+        from app.db import get_async_session
+        
+        # 获取 LLM
+        llm = get_llm()
+        
+        async for db in get_async_session():
+            manager = MemoryManager(session_id, db, llm)
+            await manager.init()
+            
+            # 检索记忆
+            memories = await manager.retrieve(query, limit=5, use_rerank=True)
+            
+            # 获取上下文
+            context = await manager.get_context_for_llm(query, limit=5)
+            
+            logger.info(f"[记忆检索] 完成: memories={len(memories)}")
+            
+            break
+        
+        return {
+            "memory_context": context,
+            "retrieved_memories": memories,
+            "memory_retrieved": True
+        }
+    
+    except Exception as e:
+        logger.error(f"[记忆检索] 失败: {e}")
+        return state

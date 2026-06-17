@@ -1,4 +1,4 @@
-"""条件路由"""
+"""条件路由 - 大厂标准"""
 from typing import Literal
 from app.agent.state import AgentState, ChatState
 from app.agent.nodes import should_continue
@@ -8,10 +8,7 @@ logger = get_logger(__name__)
 
 
 def route_agent(state: AgentState) -> Literal["tools", "end", "error"]:
-    """Agent路由
-    
-    根据Agent决策路由到不同节点
-    """
+    """Agent路由"""
     outcome = state.get("agent_outcome")
     
     if not outcome:
@@ -29,7 +26,6 @@ def route_agent(state: AgentState) -> Literal["tools", "end", "error"]:
 
 def route_after_tools(state: AgentState) -> Literal["agent", "error"]:
     """工具执行后路由"""
-    # 检查是否有错误
     tool_results = state.get("tool_results", [])
     
     for result in tool_results:
@@ -43,47 +39,55 @@ def route_error(state: AgentState) -> Literal["agent", "end"]:
     """错误路由"""
     errors = state.get("errors", [])
     
-    # 如果错误太多，直接结束
     if len(errors) > 3:
         return "end"
     
-    # 尝试恢复
     return "agent"
 
 
 def route_chat(state: ChatState) -> Literal["retrieve", "chat"]:
-    """聊天路由
-    
-    根据路由决策决定是否检索知识库
-    """
+    """聊天路由 - 根据路由决策"""
     route_decision = state.get("route_decision", {})
     needs_retrieval = route_decision.get("needs_retrieval", False)
-    needs_tool = route_decision.get("needs_tool", False)
     
-    # 添加日志
-    logger.info(f"route_chat called: needs_retrieval={needs_retrieval}, needs_tool={needs_tool}")
+    logger.info(f"route_chat: needs_retrieval={needs_retrieval}")
     
     if needs_retrieval:
-        logger.info("route_chat returning: retrieve")
         return "retrieve"
     else:
-        logger.info("route_chat returning: chat (will enter tool_decision)")
         return "chat"
 
 
 def route_tool(state: ChatState) -> Literal["tool", "chat"]:
-    """工具路由
-    
-    根据工具决策决定是否调用工具
-    
-    - OpenAI: LLM 自主决策
-    - Google: 意图分类 + LLM 决策
-    - 阿里: 规则引擎 + LLM 决策
-    """
+    """工具路由 - 根据工具决策"""
     tool_decision = state.get("tool_decision", {})
     needs_tool = tool_decision.get("needs_tool", False)
+    
+    logger.info(f"route_tool: needs_tool={needs_tool}")
     
     if needs_tool:
         return "tool"
     else:
         return "chat"
+
+
+def route_react(state: ChatState) -> Literal["tool", "chat", "end"]:
+    """ReAct 循环路由 - 大厂标准
+    
+    根据 react_status 决定下一步：
+    - tool_call: 继续执行工具
+    - completed: 完成，生成回答
+    - max_iterations: 达到最大轮次，结束
+    """
+    react_status = state.get("react_status", "completed")
+    
+    logger.info(f"route_react: react_status={react_status}")
+    
+    if react_status == "tool_call":
+        return "tool"
+    elif react_status == "completed":
+        return "chat"
+    elif react_status == "max_iterations":
+        return "end"
+    
+    return "chat"
