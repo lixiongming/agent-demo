@@ -424,8 +424,9 @@ class MemoryManager:
         }
 
 
-# 全局单例管理
+# 全局单例管理（线程安全）
 _memory_managers: Dict[str, MemoryManager] = {}
+_manager_lock = __import__('threading').Lock()
 
 
 async def get_memory_manager(
@@ -433,17 +434,19 @@ async def get_memory_manager(
     db: AsyncSession,
     llm: BaseChatModel
 ) -> MemoryManager:
-    """获取记忆管理器单例"""
-    if session_id not in _memory_managers:
-        manager = MemoryManager(session_id, db, llm)
-        await manager.init()
-        _memory_managers[session_id] = manager
+    """获取记忆管理器（不缓存实例，避免 db 会话过期问题）
     
-    return _memory_managers[session_id]
+    每次调用都创建新的 MemoryManager，因为 AsyncSession 是短生命周期的，
+    缓存会导致使用已关闭的数据库会话。
+    """
+    manager = MemoryManager(session_id, db, llm)
+    await manager.init()
+    return manager
 
 
 def clear_memory_manager(session_id: str):
     """清除记忆管理器"""
-    if session_id in _memory_managers:
-        del _memory_managers[session_id]
-        logger.info(f"记忆管理器清除: {session_id}")
+    with _manager_lock:
+        if session_id in _memory_managers:
+            del _memory_managers[session_id]
+            logger.info(f"记忆管理器清除: {session_id}")

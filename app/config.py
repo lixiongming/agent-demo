@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     RERANK_TOP_K: int = 20  # Rerank 召回数量
     RERANK_FINAL_K: int = 5  # Rerank 最终返回数量
 
+    # RAG 检索配置（统一参数）
+    RAG_TOP_K: int = 20  # 初始召回数量（用于 Rerank 前的粗召回）
+    RAG_THRESHOLD: float = 0.2  # 初始召回阈值
+    RAG_FINAL_TOP_K: int = 5  # 最终返回数量（Rerank 后）
+
     # OpenAI Embedding 配置（可选）
     OPENAI_API_KEY: str = ""  # OpenAI API Key（已废弃，使用 EMBEDDING_API_KEY）
     OPENAI_BASE_URL: str = ""  # OpenAI API Base URL（可选）

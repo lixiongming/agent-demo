@@ -6,6 +6,7 @@
 3. ToolMessage 回传机制
 4. ReAct 循环支持
 """
+import threading
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from app.agent.state import AgentState, ChatState
@@ -14,12 +15,19 @@ from app.agent.nodes import (
     route_decision_node, rag_retrieve_node,
     load_history_node, save_message_node,
     tool_decision_node, tool_execute_node,
-    react_agent_node, react_tool_execute_node
+    react_agent_node, react_tool_execute_node,
+    memory_retrieve_node, memory_integrate_node
 )
 from app.agent.router import route_agent, route_after_tools, route_error, route_chat, route_tool, route_react
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
+
+# 线程安全的全局实例
+_agent_app = None
+_chat_app = None
+_react_app = None
+_lock = threading.Lock()
 
 
 def create_agent_graph():
@@ -80,34 +88,40 @@ def create_chat_graph():
     
     完整流程：
     1. load_history: 加载历史消息
-    2. route_decision: 智能路由（Function Calling）
-    3. rag_retrieve: RAG 检索（按需）
-    4. tool_decision: 工具决策（直接使用路由结果）
-    5. tool_execute: 工具执行（ToolMessage 回传）
-    6. chat: LLM 整合结果
-    7. save_message: 保存消息
+    2. memory_retrieve: 记忆检索（长期记忆上下文）
+    3. route_decision: 智能路由（Function Calling）
+    4. rag_retrieve: RAG 检索（按需）
+    5. tool_decision: 工具决策（直接使用路由结果）
+    6. tool_execute: 工具执行（ToolMessage 回传）
+    7. chat: LLM 整合结果
+    8. save_message: 保存消息
+    9. memory_integrate: 记忆整合（提取关键事实）
     
     核心改进：
     - 合并工具决策流程
     - 使用原生 Function Calling
     - ToolMessage 回传机制
+    - 记忆检索与整合
     """
     workflow = StateGraph(ChatState)
     
     # ===== 添加节点 =====
     workflow.add_node("load_history", load_history_node)
+    workflow.add_node("memory_retrieve", memory_retrieve_node)
     workflow.add_node("route_decision", route_decision_node)
     workflow.add_node("rag_retrieve", rag_retrieve_node)
     workflow.add_node("tool_decision", tool_decision_node)
     workflow.add_node("tool_execute", tool_execute_node)
     workflow.add_node("chat", chat_node)
     workflow.add_node("save_message", save_message_node)
+    workflow.add_node("memory_integrate", memory_integrate_node)
     
     # ===== 设置入口 =====
     workflow.set_entry_point("load_history")
     
     # ===== 添加边 =====
-    workflow.add_edge("load_history", "route_decision")
+    workflow.add_edge("load_history", "memory_retrieve")
+    workflow.add_edge("memory_retrieve", "route_decision")
     
     # route_decision -> rag_retrieve 或 tool_decision
     workflow.add_conditional_edges(
@@ -133,13 +147,14 @@ def create_chat_graph():
     
     workflow.add_edge("tool_execute", "chat")
     workflow.add_edge("chat", "save_message")
-    workflow.add_edge("save_message", END)
+    workflow.add_edge("save_message", "memory_integrate")
+    workflow.add_edge("memory_integrate", END)
     
     # ===== 编译 =====
     checkpointer = MemorySaver()
     app = workflow.compile(checkpointer=checkpointer)
     
-    logger.info("Chat graph compiled (大厂标准: Function Calling + ToolMessage)")
+    logger.info("Chat graph compiled (大厂标准: Function Calling + ToolMessage + Memory)")
     return app
 
 
@@ -199,31 +214,38 @@ def create_react_graph():
     return app
 
 
-# 全局图实例
+# 全局图实例（线程安全）
 _agent_app = None
 _chat_app = None
 _react_app = None
+_lock = threading.Lock()
 
 
 def get_agent_app():
-    """获取Agent应用"""
+    """获取Agent应用（线程安全）"""
     global _agent_app
     if _agent_app is None:
-        _agent_app = create_agent_graph()
+        with _lock:
+            if _agent_app is None:
+                _agent_app = create_agent_graph()
     return _agent_app
 
 
 def get_chat_app():
-    """获取聊天应用"""
+    """获取聊天应用（线程安全）"""
     global _chat_app
     if _chat_app is None:
-        _chat_app = create_chat_graph()
+        with _lock:
+            if _chat_app is None:
+                _chat_app = create_chat_graph()
     return _chat_app
 
 
 def get_react_app():
-    """获取 ReAct 应用"""
+    """获取 ReAct 应用（线程安全）"""
     global _react_app
     if _react_app is None:
-        _react_app = create_react_graph()
+        with _lock:
+            if _react_app is None:
+                _react_app = create_react_graph()
     return _react_app

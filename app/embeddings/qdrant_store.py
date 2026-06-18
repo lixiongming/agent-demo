@@ -1,4 +1,5 @@
 """Qdrant 向量存储实现"""
+import asyncio
 from typing import List, Optional, Dict, Any
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -81,7 +82,7 @@ class QdrantVectorStore:
         ids: Optional[List[str]] = None,
     ) -> bool:
         """
-        批量添加向量
+        批量添加向量（同步方法，在 async 上下文中应使用 add_vectors_async）
 
         Args:
             vectors: 向量列表
@@ -119,6 +120,17 @@ class QdrantVectorStore:
         )
 
         return True
+
+    async def add_vectors_async(
+        self,
+        vectors: List[List[float]],
+        payloads: List[Dict[str, Any]],
+        ids: Optional[List[str]] = None,
+    ) -> bool:
+        """异步批量添加向量（避免阻塞事件循环）"""
+        return await asyncio.to_thread(
+            self.add_vectors, vectors, payloads, ids
+        )
 
     def search(
         self,
@@ -187,6 +199,18 @@ class QdrantVectorStore:
             )
 
         return search_results
+
+    async def search_async(
+        self,
+        query_vector: List[float],
+        top_k: int = 10,
+        score_threshold: float = 0.0,
+        filter_conditions: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """异步向量相似度搜索（避免阻塞事件循环）"""
+        return await asyncio.to_thread(
+            self.search, query_vector, top_k, score_threshold, filter_conditions
+        )
 
     def delete_by_ids(self, ids: List[str]) -> bool:
         """根据ID删除向量"""

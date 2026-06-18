@@ -1,4 +1,5 @@
 """LLM 工厂 - 多模型支持"""
+import threading
 from typing import Optional, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
@@ -14,9 +15,11 @@ class LLMFactory:
     """LLM工厂
     
     支持多种LLM模型的创建和管理
+    线程安全的单例缓存
     """
     
     _instances: Dict[str, BaseChatModel] = {}
+    _lock = threading.Lock()
     
     @classmethod
     def create(
@@ -37,33 +40,40 @@ class LLMFactory:
             LLM实例
         """
         model = model_name or settings.DEFAULT_MODEL
-        temp = temperature or settings.TEMPERATURE
-        tokens = max_tokens or settings.MAX_TOKENS
+        temp = temperature if temperature is not None else settings.TEMPERATURE
+        tokens = max_tokens if max_tokens is not None else settings.MAX_TOKENS
         
-        # 检查缓存
+        # 检查缓存（线程安全）
         cache_key = f"{model}_{temp}_{tokens}"
         if cache_key in cls._instances:
             return cls._instances[cache_key]
         
-        # 创建实例
-        try:
-            llm = ChatOpenAI(
-                model=model,
-                temperature=temp,
-                max_tokens=tokens,
-                api_key=settings.DASHSCOPE_API_KEY,
-                base_url=settings.DASHSCOPE_BASE_URL,
-                **kwargs
-            )
+        # 双重检查锁
+        with cls._lock:
+            if cache_key in cls._instances:
+                return cls._instances[cache_key]
             
-            cls._instances[cache_key] = llm
-            logger.info(f"LLM created: {model}")
+            # 创建实例
+            try:
+                llm = ChatOpenAI(
+                    model=model,
+                    temperature=temp,
+                    max_tokens=tokens,
+                    api_key=settings.DASHSCOPE_API_KEY,
+                    base_url=settings.DASHSCOPE_BASE_URL,
+                    request_timeout=60,  # 请求超时 60 秒
+                    max_retries=2,  # 最大重试次数
+                    **kwargs
+                )
+                
+                cls._instances[cache_key] = llm
+                logger.info(f"LLM created: {model}")
+                
+                return llm
             
-            return llm
-        
-        except Exception as e:
-            logger.error(f"LLM creation error: {e}")
-            raise LLMException(f"Failed to create LLM: {e}")
+            except Exception as e:
+                logger.error(f"LLM creation error: {e}")
+                raise LLMException(f"Failed to create LLM: {e}")
     
     @classmethod
     def get_available_models(cls) -> list:
@@ -80,8 +90,9 @@ class LLMFactory:
     @classmethod
     def clear_cache(cls):
         """清除缓存"""
-        cls._instances.clear()
-        logger.info("LLM cache cleared")
+        with cls._lock:
+            cls._instances.clear()
+            logger.info("LLM cache cleared")
 
 
 def get_llm(

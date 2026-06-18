@@ -235,16 +235,29 @@ class RerankService:
         logger.info("Rerank 服务已关闭")
 
 
-# 全局单例
+# 全局单例（线程安全）
 _rerank_service: Optional[RerankService] = None
+_lock = __import__('threading').Lock()
 
 
 def get_rerank_service() -> RerankService:
-    """获取 Rerank 服务单例"""
+    """获取 Rerank 服务单例（线程安全）"""
     global _rerank_service
     if _rerank_service is None:
-        _rerank_service = RerankService()
+        with _lock:
+            if _rerank_service is None:
+                _rerank_service = RerankService()
     return _rerank_service
+
+
+async def shutdown_rerank_service():
+    """关闭 Rerank 服务（应用关闭时调用）"""
+    global _rerank_service
+    if _rerank_service is not None:
+        with _lock:
+            if _rerank_service is not None:
+                await _rerank_service.close()
+                _rerank_service = None
 
 
 async def rerank_documents(

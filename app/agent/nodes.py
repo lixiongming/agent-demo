@@ -111,6 +111,9 @@ async def route_decision_node(state: ChatState) -> Dict[str, Any]:
 
 async def rag_retrieve_node(state: ChatState) -> Dict[str, Any]:
     """RAG 检索节点"""
+    from app.config import get_settings
+    settings = get_settings()
+    
     async with tracer.span("rag_retrieve") as span:
         logger.info("RAG retrieve node executing")
         
@@ -132,8 +135,8 @@ async def rag_retrieve_node(state: ChatState) -> Dict[str, Any]:
             async with tracer.span("vector_search"):
                 result = await rag_service.query(
                     question=current_input,
-                    top_k=5,
-                    threshold=0.3
+                    top_k=settings.RAG_TOP_K,
+                    threshold=settings.RAG_THRESHOLD
                 )
             
             sources = result.get("sources", [])
@@ -867,13 +870,13 @@ async def memory_integrate_node(state: AgentState) -> Dict[str, Any]:
     try:
         from app.memory import MemoryIntegrator
         from app.llm.factory import get_llm
-        from app.db import get_async_session
+        from app.db.database import AsyncSessionLocal
         
         # 获取 LLM
         llm = get_llm()
         
-        # 获取数据库会话
-        async for db in get_async_session():
+        # 使用 async with 正确管理数据库会话
+        async with AsyncSessionLocal() as db:
             integrator = MemoryIntegrator(llm, db)
             
             # 整合对话
@@ -888,7 +891,6 @@ async def memory_integrate_node(state: AgentState) -> Dict[str, Any]:
                     await integrator.store_integrated_memory(fact, session_id)
             
             await db.commit()
-            break
         
         return {
             "memory_integrated": True,
@@ -922,9 +924,9 @@ async def memory_forgetting_node(state: AgentState) -> Dict[str, Any]:
     
     try:
         from app.memory import ForgettingManager
-        from app.db import get_async_session
+        from app.db.database import AsyncSessionLocal
         
-        async for db in get_async_session():
+        async with AsyncSessionLocal() as db:
             manager = ForgettingManager(session_id, db)
             
             # 执行遗忘周期
@@ -935,8 +937,6 @@ async def memory_forgetting_node(state: AgentState) -> Dict[str, Any]:
                 f"decayed={result.get('decay', {}).get('decayed_count', 0)}, "
                 f"evicted={result.get('evict', {}).get('evicted_count', 0)}"
             )
-            
-            break
         
         return {
             "forgetting_cycle_run": True,
@@ -972,12 +972,12 @@ async def memory_retrieve_node(state: AgentState) -> Dict[str, Any]:
     try:
         from app.memory import MemoryManager
         from app.llm.factory import get_llm
-        from app.db import get_async_session
+        from app.db.database import AsyncSessionLocal
         
         # 获取 LLM
         llm = get_llm()
         
-        async for db in get_async_session():
+        async with AsyncSessionLocal() as db:
             manager = MemoryManager(session_id, db, llm)
             await manager.init()
             
@@ -988,8 +988,6 @@ async def memory_retrieve_node(state: AgentState) -> Dict[str, Any]:
             context = await manager.get_context_for_llm(query, limit=5)
             
             logger.info(f"[记忆检索] 完成: memories={len(memories)}")
-            
-            break
         
         return {
             "memory_context": context,

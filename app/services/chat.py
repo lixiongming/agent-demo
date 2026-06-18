@@ -124,10 +124,12 @@ class ChatService:
         """聊天（流式）- 智能路由 + RAG + 流式输出
         
         流程：
-        1. 智能路由决策
-        2. RAG 检索（按需）
-        3. 流式生成响应
-        4. 保存消息
+        1. 加载会话和历史
+        2. 智能路由决策
+        3. 工具执行（按需）
+        4. RAG 检索（按需）
+        5. 流式生成响应
+        6. 保存消息（统一事务）
         """
         logger.info(f"ChatService.chat_stream called: session={session_id}, user={user_id}")
 
@@ -269,14 +271,14 @@ class ChatService:
                         # 检索更多候选（用于 Rerank）
                         result = await rag_service.query(
                             question=message,
-                            top_k=20,  # 召回更多候选
-                            threshold=0.2  # 降低阈值，召回更多
+                            top_k=settings.RAG_TOP_K,
+                            threshold=settings.RAG_THRESHOLD
                         )
                         
                         sources = result.get("sources", [])
                         
                         # Rerank 重排序
-                        if sources and len(sources) > 5:
+                        if sources and len(sources) > settings.RAG_FINAL_TOP_K:
                             async with tracer.span("rerank"):
                                 reranker = get_rerank_service()
                                 
@@ -287,7 +289,7 @@ class ChatService:
                                 rerank_results = await reranker.rerank(
                                     query=message,
                                     documents=documents,
-                                    top_k=5
+                                    top_k=settings.RAG_FINAL_TOP_K
                                 )
                                 
                                 # 按重排序结果重新排列
@@ -380,50 +382,56 @@ class ChatService:
                 ))
 
         # 打印发送给模型的消息摘要（详细日志只在 DEBUG 模式）
-        logger.info(f"🚀 发送给模型的消息总数: {len(messages)}")
+        logger.info(f"发送给模型的消息总数: {len(messages)}")
         if settings.DEBUG:
             for i, msg in enumerate(messages):
                 content_preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
                 logger.debug(f"  [{i}] {msg.type}: {content_preview}")
 
-        # 保存用户消息
-        async with AsyncSessionLocal() as db:
-            message_repo = MessageRepository(db)
-            await message_repo.create(
-                session_id=db_session_id,
-                role="user",
-                content=message
-            )
-            await db.commit()  # 提交事务
-        
-        # 流式调用 LLM
+        # ===== 6. 流式调用 LLM =====
         llm = get_llm(model_name or settings.DEFAULT_MODEL)
         full_response = []
         
-        async with tracer.span("llm_stream"):
-            async for chunk in llm.astream(messages):
-                content = chunk.content
-                if content and content.strip():
-                    full_response.append(content)
-                    yield {"content": content}
+        try:
+            async with tracer.span("llm_stream"):
+                async for chunk in llm.astream(messages):
+                    content = chunk.content
+                    if content and content.strip():
+                        full_response.append(content)
+                        yield {"content": content}
+        except Exception as e:
+            logger.error(f"LLM 流式调用失败: {e}")
+            yield {"content": "抱歉，生成响应时出现错误，请稍后重试。"}
+            return
         
-        # ===== 6. 流式生成响应 =====
+        # ===== 7. 保存消息（统一事务，LLM 成功后才保存）=====
         complete_response = "".join(full_response)
         
-        async with AsyncSessionLocal() as db:
-            session_repo = SessionRepository(db)
-            message_repo = MessageRepository(db)
-            
-            await message_repo.create(
-                session_id=db_session_id,
-                role="assistant",
-                content=complete_response,
-                model_name=model_name or settings.DEFAULT_MODEL
-            )
-            
-            await session_repo.increment_message_count(session_id)
-            
-            await db.commit()  # 提交事务
+        if complete_response:
+            try:
+                async with AsyncSessionLocal() as db:
+                    session_repo = SessionRepository(db)
+                    message_repo = MessageRepository(db)
+                    
+                    # 保存用户消息和助手消息在同一事务中
+                    await message_repo.create(
+                        session_id=db_session_id,
+                        role="user",
+                        content=message
+                    )
+                    
+                    await message_repo.create(
+                        session_id=db_session_id,
+                        role="assistant",
+                        content=complete_response,
+                        model_name=model_name or settings.DEFAULT_MODEL
+                    )
+                    
+                    await session_repo.increment_message_count(session_id)
+                    
+                    await db.commit()  # 统一提交事务
+            except Exception as e:
+                logger.error(f"保存消息失败: {e}")
         
         # 返回最终状态
         yield {

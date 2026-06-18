@@ -10,6 +10,7 @@
 """
 import time
 import re
+import threading
 from typing import Dict, Any, Optional, List
 from collections import OrderedDict
 from langchain_core.messages import HumanMessage, AIMessage
@@ -380,15 +381,18 @@ class SmartRouter:
         return len(expired_keys)
 
 
-# 全局路由器实例
+# 全局路由器实例（线程安全）
 _router = None
+_router_lock = threading.Lock()
 
 
 def get_router() -> SmartRouter:
-    """获取全局路由器实例"""
+    """获取全局路由器实例（线程安全）"""
     global _router
     if _router is None:
-        _router = SmartRouter()
+        with _router_lock:
+            if _router is None:
+                _router = SmartRouter()
     return _router
 
 
