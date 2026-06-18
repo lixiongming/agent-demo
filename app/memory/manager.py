@@ -38,7 +38,7 @@ from app.memory.long_term import LongTermMemory
 from app.memory.forgetting import ForgettingManager
 from app.memory.conflict import ConflictResolver
 from app.memory.integration import MemoryIntegrator
-from app.embeddings.zhipu_embedding import get_embedding_model
+from app.embeddings import get_embedding_service
 import json
 
 logger = get_logger(__name__)
@@ -84,7 +84,7 @@ class MemoryManager:
         self.config = config or {}
         
         # 嵌入模型
-        self.embedding_model = get_embedding_model()
+        self.embedding_model = get_embedding_service()
         
         # 初始化子模块
         self.short_term = ShortTermMemory(session_id)
@@ -149,7 +149,10 @@ class MemoryManager:
         """
         try:
             # 生成向量
-            embedding = await self.embedding_model.embed_query(content)
+            embedding = await self.embedding_model.embed_text(content)
+            # numpy 数组转列表
+            if hasattr(embedding, "tolist"):
+                embedding = embedding.tolist()
             
             # 检查冲突
             if check_conflict:
@@ -224,7 +227,10 @@ class MemoryManager:
         """
         try:
             # 1. 向量检索长期记忆
-            query_embedding = await self.embedding_model.embed_query(query)
+            query_embedding = await self.embedding_model.embed_text(query)
+            # numpy 数组转列表
+            if hasattr(query_embedding, "tolist"):
+                query_embedding = query_embedding.tolist()
             long_term_memories = await self.long_term.search_similar(
                 query_embedding, limit=limit * 2
             )

@@ -31,7 +31,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
 from app.core.logger import get_logger
 from app.config import get_settings
-from app.embeddings.zhipu_embedding import get_embedding_model
+from app.embeddings import get_embedding_service
 import json
 
 logger = get_logger(__name__)
@@ -79,7 +79,7 @@ class MemoryIntegrator:
         """
         self.llm = llm
         self.db = db
-        self.embedding_model = embedding_model or get_embedding_model()
+        self.embedding_model = embedding_model or get_embedding_service()
         
         # 统计
         self.stats = {
@@ -333,7 +333,7 @@ class MemoryIntegrator:
         for memory in memories:
             content = memory.get("content", "")
             if content:
-                embedding = await self.embedding_model.embed_query(content)
+                embedding = await self.embedding_model.embed_text(content)
                 memory_embeddings.append(embedding)
             else:
                 memory_embeddings.append(None)
@@ -470,58 +470,46 @@ class MemoryIntegrator:
         session_id: str
     ) -> Dict[str, Any]:
         """存储整合后的记忆
-        
+
+        使用 Qdrant 存储向量（而非 MySQL，MySQL 不支持向量操作）。
+
         Args:
             fact: 事实信息
             session_id: 会话 ID
-            
+
         Returns:
             存储结果
         """
-        if not self.db:
-            return {"success": False, "error": "数据库未初始化"}
-        
         try:
             # 构建记忆内容
             content = f"{fact['fact_key']}: {fact['fact_value']}"
-            
+
             # 生成向量
-            embedding = await self.embedding_model.embed_query(content)
-            
-            # 存储到数据库
-            query = text("""
-                INSERT INTO long_term_memory
-                (session_id, content, metadata, embedding, weight, importance, confidence, created_at)
-                VALUES (:session_id, :content, :metadata, :embedding, 1.0, 1.0, :confidence, NOW())
-            """)
-            
+            embedding = await self.embedding_model.embed_text(content)
+            # numpy 数组转列表
+            if hasattr(embedding, "tolist"):
+                embedding = embedding.tolist()
+
+            # 使用 LongTermMemory 存储到 Qdrant
+            from app.memory.long_term import LongTermMemory
+            ltm = LongTermMemory(session_id, self.db)
+
             metadata = {
                 "fact_type": fact["fact_type"],
                 "fact_key": fact["fact_key"],
                 "fact_value": fact["fact_value"],
-                "source": fact.get("source", "对话提取")
+                "source": fact.get("source", "对话提取"),
+                "confidence": fact.get("confidence", 0.5),
             }
-            
-            await self.db.execute(
-                query,
-                {
-                    "session_id": session_id,
-                    "content": content,
-                    "metadata": json.dumps(metadata),
-                    "embedding": embedding,
-                    "confidence": fact.get("confidence", 0.5)
-                }
-            )
-            
-            await self.db.commit()
-            
+
+            await ltm.add_memory(content, metadata=metadata, embedding=embedding)
+
             logger.info(f"记忆已存储: {content}")
-            
+
             return {"success": True, "content": content}
-        
+
         except Exception as e:
             logger.error(f"记忆存储失败: {e}")
-            await self.db.rollback()
             return {"success": False, "error": str(e)}
     
     def get_stats(self) -> Dict[str, Any]:

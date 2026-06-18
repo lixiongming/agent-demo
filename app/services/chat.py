@@ -346,14 +346,26 @@ class ChatService:
                         content=f"""以下是工具查询返回的新闻数据，请基于这些真实数据回答用户问题：{tool_context}请基于以上真实新闻数据回答用户问题。"""
                     ))
             # 特殊处理知识库检索结果
-            elif tool_name == "knowledge_search" and tool_result.get("found"):
-                knowledge_content = tool_result.get("knowledge", "")
-                total_results = tool_result.get("total_results", 0)
-                
-                messages.insert(0, SystemMessage(
-                    content=f"""以下是知识库中检索到的 {total_results} 条相关内容，请参考这些内容回答用户问题：{knowledge_content}请基于以上知识库内容回答用户问题。"""
-                ))
-                logger.info(f"知识库检索结果已注入上下文: {total_results} 条内容")
+            elif tool_name == "knowledge_search":
+                # 检查是否成功
+                if tool_result.get("success") and tool_result.get("found"):
+                    knowledge_content = tool_result.get("knowledge", "")
+                    total_results = tool_result.get("total_results", 0)
+                    
+                    messages.insert(0, SystemMessage(
+                        content=f"""以下是知识库中检索到的 {total_results} 条相关内容，请参考这些内容回答用户问题：
+
+{knowledge_content}
+
+请基于以上知识库内容回答用户问题。"""
+                    ))
+                    logger.info(f"知识库检索结果已注入上下文: {total_results} 条内容")
+                else:
+                    # 检索失败或无结果，使用降级策略
+                    error_msg = tool_result.get("error", tool_result.get("message", "未知错误"))
+                    logger.warning(f"知识库检索失败: {error_msg}")
+                    # 不注入错误信息，让 LLM 使用自己的知识回答
+                    logger.info("降级策略：LLM 将使用自身知识回答")
             # 特殊处理天气查询结果
             elif tool_name == "get_weather" and tool_result.get("success"):
                 weather_desc = tool_result.get("description", "")

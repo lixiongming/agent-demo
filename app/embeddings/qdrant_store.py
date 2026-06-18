@@ -23,7 +23,7 @@ class QdrantVectorStore:
         collection_name: str = "knowledge_base",
         host: str = "localhost",
         port: int = 6333,
-        vector_size: int = 1024,
+        vector_size: int = 2048,  # 默认使用智谱 embedding-3 的维度
         distance: Distance = Distance.COSINE,
         api_key: Optional[str] = None,
         path: Optional[str] = None,  # 本地存储路径（内存模式为 None）
@@ -223,7 +223,7 @@ class QdrantVectorStore:
 class QdrantKnowledgeStore(QdrantVectorStore):
     """LOL 知识库专用 Qdrant 存储"""
 
-    def __init__(self, collection_name: str = "lol_knowledge_base", **kwargs):
+    def __init__(self, collection_name: str = "knowledge_base", **kwargs):
         super().__init__(collection_name=collection_name, **kwargs)
 
     def add_document(
