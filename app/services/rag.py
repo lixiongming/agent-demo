@@ -13,6 +13,7 @@
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import os
+import asyncio
 
 from app.embeddings import ZhipuEmbeddingService, DocumentLoader, Retriever, DocumentChunk, get_embedding_service
 from app.embeddings.qdrant_store import get_qdrant_adapter
@@ -20,6 +21,9 @@ from app.config import get_settings
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
+
+# 允许入库的基础目录（安全白名单）
+ALLOWED_BASE_DIRS = os.environ.get("RAG_ALLOWED_DIRS", "/data/documents,/app/documents").split(",")
 
 
 class RAGService:
@@ -128,9 +132,7 @@ class RAGService:
                 "doc_type": chunk.doc_type
             })
         
-        doc_ids = self.vector_store.add_documents_batch(documents)
-        
-        logger.info(f"Document ingested: {file_path}, chunks: {len(chunks)}")
+        doc_ids = await asyncio.to_thread(self.vector_store.add_documents_batch, documents)
         
         return {
             "file_path": file_path,
@@ -149,16 +151,29 @@ class RAGService:
         """批量入库目录
         
         Args:
-            directory: 目录路径
+            directory: 目录路径（必须在白名单目录内）
             file_types: 文件类型过滤
             metadata: 额外元数据
             
         Returns:
             入库结果
         """
-        chunks = self.document_loader.load_directory(
-            directory,
-            file_types=file_types
+        # 路径安全检查：防止路径遍历
+        real_dir = os.path.realpath(directory)
+        allowed = any(real_dir.startswith(os.path.realpath(d)) for d in ALLOWED_BASE_DIRS if os.path.isdir(d))
+        if not allowed:
+            logger.warning(f"Directory access denied: {directory} (resolved: {real_dir})")
+            return {
+                "directory": directory,
+                "total_chunks": 0,
+                "stored_ids": [],
+                "status": "access_denied",
+                "message": f"目录不在允许列表内: {ALLOWED_BASE_DIRS}",
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        chunks = await asyncio.to_thread(
+            self.document_loader.load_directory, directory, file_types
         )
         
         if not chunks:
@@ -187,7 +202,7 @@ class RAGService:
                 "doc_type": chunk.doc_type
             })
         
-        doc_ids = self.vector_store.add_documents_batch(documents)
+        doc_ids = await asyncio.to_thread(self.vector_store.add_documents_batch, documents)
         
         logger.info(f"Directory ingested: {directory}, chunks: {len(chunks)}")
         
@@ -217,7 +232,8 @@ class RAGService:
         """
         embedding = await self.embedding_service.embed_text(content)
         
-        doc_id = self.vector_store.add_document(
+        doc_id = await asyncio.to_thread(
+            self.vector_store.add_document,
             content=content,
             embedding=embedding,
             metadata=metadata or {},
@@ -346,7 +362,7 @@ class RAGService:
                 response = await self.llm_client.ainvoke(prompt)
                 return response.content
             elif hasattr(self.llm_client, 'invoke'):
-                response = self.llm_client.invoke(prompt)
+                response = await asyncio.to_thread(self.llm_client.invoke, prompt)
                 return response.content
             else:
                 return str(self.llm_client(prompt))
@@ -363,7 +379,7 @@ class RAGService:
         Returns:
             是否成功
         """
-        result = self.vector_store.delete_document(doc_id)
+        result = await asyncio.to_thread(self.vector_store.delete_document, doc_id)
         logger.info(f"Document deleted: doc_id={doc_id}, result={result}")
         return result
     
@@ -376,7 +392,7 @@ class RAGService:
         Returns:
             删除数量
         """
-        count = self.vector_store.delete_by_source(source)
+        count = await asyncio.to_thread(self.vector_store.delete_by_source, source)
         logger.info(f"Documents deleted by source: source={source}, count={count}")
         return count
     

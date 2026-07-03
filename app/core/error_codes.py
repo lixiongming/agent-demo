@@ -31,7 +31,7 @@ class ErrorCode(str, Enum):
     - 3000-3999: 聊天相关
     - 4000-4999: RAG 相关
     - 5000-5999: LLM 相关
-    - 6000-5999: 数据库相关
+    - 6000-6999: 数据库相关
     - 7000-7999: 限流/熔断
     - 8000-8999: 第三方服务
     """
@@ -245,7 +245,16 @@ class APIError(Exception):
         return messages.get(code, "未知错误")
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典（用于 API 响应）"""
+        """转换为字典（用于 API 响应，不暴露内部信息）"""
+        return {
+            "code": self.code,
+            "message": self.message,
+            "details": self.details,
+            "trace_id": self.trace_id
+        }
+
+    def to_internal_dict(self) -> Dict[str, Any]:
+        """转换为内部字典（包含 level 和 solution，仅用于日志）"""
         return {
             "code": self.code,
             "message": self.message,
@@ -254,6 +263,23 @@ class APIError(Exception):
             "details": self.details,
             "trace_id": self.trace_id
         }
+
+    @property
+    def status_code(self) -> int:
+        """根据错误码返回 HTTP 状态码"""
+        code_int = int(self.code)
+        if code_int == 1005:
+            return 401
+        elif code_int == 1006:
+            return 403
+        elif code_int == 1007:
+            return 404
+        elif 7000 <= code_int < 8000:
+            return 429
+        elif 8000 <= code_int < 9000:
+            return 502
+        else:
+            return 400
     
     def __str__(self) -> str:
         return f"[{self.code}] {self.message}"

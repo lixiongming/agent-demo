@@ -253,11 +253,14 @@ def get_rerank_service() -> RerankService:
 async def shutdown_rerank_service():
     """关闭 Rerank 服务（应用关闭时调用）"""
     global _rerank_service
-    if _rerank_service is not None:
-        with _lock:
-            if _rerank_service is not None:
-                await _rerank_service.close()
-                _rerank_service = None
+    with _lock:
+        service = _rerank_service
+        if service is None:
+            return
+        _rerank_service = None
+    
+    await service.close()
+    logger.info("Rerank 服务已关闭")
 
 
 async def rerank_documents(

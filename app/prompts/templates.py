@@ -4,12 +4,18 @@
 - 模板化管理
 - 参数化配置
 - 多场景支持
-- 版本控制
+- YAML 外置配置（支持版本控制和灰度发布）
+- 硬编码默认值兜底
 """
 from typing import Dict, Any, Optional, List
 from string import Template
 import json
+import yaml
 from pathlib import Path
+
+from app.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class PromptTemplates:
@@ -19,9 +25,17 @@ class PromptTemplates:
     - 统一管理
     - 动态生成
     - 参数验证
+    - YAML 外置配置
+    - 硬编码默认值兜底
     """
     
-    # 系统提示词模板
+    # YAML 配置路径
+    _YAML_PATH = Path(__file__).parent / "prompts.yaml"
+    
+    # 已加载的 YAML 配置
+    _yaml_config: Optional[Dict[str, Any]] = None
+    
+    # 系统提示词模板（硬编码默认值，YAML 加载后覆盖）
     SYSTEM_PROMPTS = {
         "chat": """你是一个智能助手，名叫"通义千问"。
 你的职责是：
@@ -65,7 +79,7 @@ $context
 
 问题：$question
 
-请根据文档内容给出准确、详细的回答。如果文档中没有相关信息，请说明。"找不到相关信息"。"""),
+请根据文档内容给出准确、详细的回答。如果文档中没有相关信息，请说明"找不到相关信息"。"""),
         
         "concise": Template("""根据以下内容回答问题（简洁版）：
 
@@ -118,7 +132,6 @@ $tools
 
 当前步骤：$current_step"""),
         
-        # 智能路由决策提示词
         "route_decision": Template("""你是一个智能路由器，需要判断用户问题是否需要从知识库检索信息。
 
 知识库包含的内容：
@@ -181,15 +194,55 @@ $history
     }
     
     @classmethod
+    def _load_yaml_config(cls) -> Optional[Dict[str, Any]]:
+        """加载 YAML 配置文件"""
+        if cls._yaml_config is not None:
+            return cls._yaml_config
+        
+        if not cls._YAML_PATH.exists():
+            logger.debug(f"Prompts YAML not found: {cls._YAML_PATH}, using defaults")
+            return None
+        
+        try:
+            with open(cls._YAML_PATH, "r", encoding="utf-8") as f:
+                cls._yaml_config = yaml.safe_load(f)
+            
+            version = cls._yaml_config.get("version", "unknown")
+            logger.info(f"Loaded prompts from YAML: version={version}")
+            return cls._yaml_config
+        except Exception as e:
+            logger.warning(f"Failed to load prompts YAML: {e}, using defaults")
+            return None
+    
+    @classmethod
+    def _get_yaml_prompt(cls, category: str, name: str) -> Optional[str]:
+        """从 YAML 配置获取提示词"""
+        config = cls._load_yaml_config()
+        if not config:
+            return None
+        
+        category_prompts = config.get(category)
+        if not category_prompts:
+            return None
+        
+        return category_prompts.get(name)
+    
+    @classmethod
+    def reload_yaml(cls):
+        """重新加载 YAML 配置（支持热更新）"""
+        cls._yaml_config = None
+        cls._load_yaml_config()
+        logger.info("Prompts YAML reloaded")
+    
+    @classmethod
     def get_system_prompt(cls, prompt_type: str) -> str:
         """获取系统提示词
         
-        Args:
-            prompt_type: 提示词类型
-            
-        Returns:
-            系统提示词
+        优先从 YAML 配置加载，回退到硬编码默认值
         """
+        yaml_prompt = cls._get_yaml_prompt("system_prompts", prompt_type)
+        if yaml_prompt:
+            return yaml_prompt
         return cls.SYSTEM_PROMPTS.get(prompt_type, cls.SYSTEM_PROMPTS["chat"])
     
     @classmethod
@@ -199,16 +252,13 @@ $history
         question: str,
         style: str = "default"
     ) -> str:
-        """获取RAG提示词
+        """获取RAG提示词"""
+        # 尝试从 YAML 加载
+        yaml_prompt = cls._get_yaml_prompt("rag_prompts", style)
+        if yaml_prompt:
+            return yaml_prompt.format(context=context, question=question)
         
-        Args:
-            context: 上下文内容
-            question: 问题
-            style: 风格
-            
-        Returns:
-            RAG提示词
-        """
+        # 回退到硬编码模板
         template = cls.RAG_PROMPTS.get(style, cls.RAG_PROMPTS["default"])
         return template.substitute(context=context, question=question)
     
@@ -220,17 +270,13 @@ $history
         current_step: str = "",
         agent_type: str = "react"
     ) -> str:
-        """获取Agent提示词
+        """获取Agent提示词"""
+        # 尝试从 YAML 加载
+        yaml_prompt = cls._get_yaml_prompt("agent_prompts", agent_type)
+        if yaml_prompt:
+            return yaml_prompt.format(task=task, tools=tools, current_step=current_step)
         
-        Args:
-            task: 任务
-            tools: 工具列表
-            current_step: 当前步骤
-            agent_type: Agent类型
-            
-        Returns:
-            Agent提示词
-        """
+        # 回退到硬编码模板
         template = cls.AGENT_PROMPTS.get(agent_type, cls.AGENT_PROMPTS["react"])
         return template.substitute(
             task=task,
@@ -244,15 +290,7 @@ $history
         tool_name: str,
         **kwargs
     ) -> str:
-        """获取工具提示词
-        
-        Args:
-            tool_name: 工具名称
-            **kwargs: 参数
-            
-        Returns:
-            工具提示词
-        """
+        """获取工具提示词"""
         template = cls.TOOL_PROMPTS.get(tool_name)
         if template:
             return template.substitute(**kwargs)
@@ -264,15 +302,14 @@ $history
         prompt_type: str,
         **kwargs
     ) -> str:
-        """获取对话提示词
+        """获取对话提示词"""
+        # 尝试从 YAML 加载
+        yaml_prompt = cls._get_yaml_prompt("conversation_prompts", prompt_type)
+        if yaml_prompt:
+            if kwargs:
+                return yaml_prompt.format(**kwargs)
+            return yaml_prompt
         
-        Args:
-            prompt_type: 提示词类型
-            **kwargs: 参数
-            
-        Returns:
-            对话提示词
-        """
         if prompt_type == "greeting":
             return cls.CONVERSATION_PROMPTS["greeting"]
         
@@ -306,8 +343,6 @@ def get_prompt(
     Returns:
         提示词
     """
-    templates = PromptTemplates()
-    
     if prompt_type in PromptTemplates.SYSTEM_PROMPTS:
         return PromptTemplates.get_system_prompt(prompt_type)
     elif prompt_type == "rag":
@@ -322,15 +357,8 @@ def get_prompt(
 
 # 预定义的常用提示词
 COMMON_PROMPTS = {
-    # 聊天场景
     "chat_default": PromptTemplates.get_system_prompt("chat"),
-    
-    # RAG场景
     "rag_default": PromptTemplates.RAG_PROMPTS["default"].template,
-    
-    # Agent场景
     "agent_react": PromptTemplates.AGENT_PROMPTS["react"].template,
-    
-    # 问候语
     "greeting": PromptTemplates.CONVERSATION_PROMPTS["greeting"]
 }

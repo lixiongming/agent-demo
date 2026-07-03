@@ -32,6 +32,7 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
 from datetime import datetime
 from contextlib import asynccontextmanager
+from functools import wraps
 from app.core.logger import get_logger, request_id_var
 
 logger = get_logger(__name__)
@@ -116,6 +117,9 @@ class Tracer:
     - 统计分析
     """
 
+    MAX_COMPLETED_REQUESTS = 1000
+    MAX_ACTIVE_SPANS_PER_REQUEST = 50
+
     def __init__(self):
         # 当前活跃的 Span 栈（支持嵌套）
         self._active_spans: Dict[str, List[Span]] = {}
@@ -161,6 +165,13 @@ class Tracer:
             self._active_spans[request_id] = []
         self._active_spans[request_id].append(span)
 
+        # 安全检查：活跃 span 数量过多，可能存在泄漏
+        if len(self._active_spans[request_id]) > self.MAX_ACTIVE_SPANS_PER_REQUEST:
+            logger.warning(
+                f"[{request_id}] Active spans count ({len(self._active_spans[request_id])}) "
+                f"exceeds limit ({self.MAX_ACTIVE_SPANS_PER_REQUEST}), possible span leak"
+            )
+
         # 更新统计
         self._stats["total_spans"] += 1
 
@@ -184,6 +195,9 @@ class Tracer:
             self._completed_spans[request_id] = []
         self._completed_spans[request_id].append(span)
 
+        # 淘汰过旧的已完成请求数据
+        self._evict_completed_spans()
+
         # 更新统计
         if span.status == SpanStatus.ERROR:
             self._stats["error_count"] += 1
@@ -194,6 +208,12 @@ class Tracer:
             logger.warning(log_msg)
         else:
             logger.info(log_msg)
+
+    def _evict_completed_spans(self):
+        """淘汰过旧的已完成请求数据，保持 _completed_spans 不超过上限"""
+        while len(self._completed_spans) > self.MAX_COMPLETED_REQUESTS:
+            oldest_key = next(iter(self._completed_spans))
+            del self._completed_spans[oldest_key]
 
     @asynccontextmanager
     async def span(self, name: str, attributes: Dict[str, Any] = None):
@@ -251,6 +271,26 @@ class Tracer:
         self._completed_spans.clear()
         logger.info("All tracing data cleared")
 
+    def export_traces(self, format: str = "json") -> str:
+        """导出追踪数据
+
+        Args:
+            format: 导出格式，支持 json
+
+        Returns:
+            导出的数据字符串
+        """
+        import json
+
+        all_traces = {}
+        for request_id, spans in self._completed_spans.items():
+            all_traces[request_id] = [span.to_dict() for span in spans]
+
+        if format == "json":
+            return json.dumps(all_traces, ensure_ascii=False, indent=2)
+
+        raise ValueError(f"Unsupported export format: {format}")
+
 
 # ============================================
 # 全局 Tracer 实例
@@ -295,6 +335,7 @@ def traced(name: str = None):
     def decorator(func):
         span_name = name or func.__name__
 
+        @wraps(func)
         async def wrapper(*args, **kwargs):
             async with tracer.span(span_name) as span:
                 # 记录参数

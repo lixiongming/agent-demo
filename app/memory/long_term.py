@@ -13,6 +13,8 @@
 """
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+import asyncio
+
 from app.config import get_settings
 from app.core.logger import get_logger
 from app.embeddings import get_embedding_service
@@ -92,7 +94,8 @@ class LongTermMemory:
             }
 
             # 存储到 Qdrant
-            self.qdrant.add_vectors(
+            await asyncio.to_thread(
+                self.qdrant.add_vectors,
                 vectors=[embedding],
                 payloads=[payload],
                 ids=[memory_id],
@@ -127,7 +130,8 @@ class LongTermMemory:
                 query_embedding = query_embedding.tolist()
 
             # 使用 Qdrant 搜索，通过 session_id 过滤
-            results = self.qdrant.search(
+            results = await asyncio.to_thread(
+                self.qdrant.search,
                 query_vector=query_embedding,
                 top_k=limit,
                 score_threshold=threshold,
@@ -187,7 +191,8 @@ class LongTermMemory:
                 keyword_embedding = keyword_embedding.tolist()
 
             # 向量搜索，获取较多结果
-            results = self.qdrant.search(
+            results = await asyncio.to_thread(
+                self.qdrant.search,
                 query_vector=keyword_embedding,
                 top_k=limit * 3,  # 多取一些，后面再过滤
                 score_threshold=0.3,  # 降低阈值，让更多结果进入
@@ -239,7 +244,8 @@ class LongTermMemory:
             # 使用 Qdrant scroll 获取所有记忆
             from qdrant_client.http import models
 
-            points, _ = self.qdrant.client.scroll(
+            points, _ = await asyncio.to_thread(
+                self.qdrant.client.scroll,
                 collection_name=self.qdrant.collection_name,
                 scroll_filter=models.Filter(
                     must=[
@@ -286,7 +292,8 @@ class LongTermMemory:
             from qdrant_client.http import models
 
             # 通过过滤条件删除当前会话的所有记忆
-            self.qdrant.client.delete(
+            await asyncio.to_thread(
+                self.qdrant.client.delete,
                 collection_name=self.qdrant.collection_name,
                 points_selector=models.FilterSelector(
                     filter=models.Filter(
@@ -311,7 +318,8 @@ class LongTermMemory:
             from qdrant_client.http import models
 
             # 使用 scroll 获取当前会话的记忆数量
-            points, _ = self.qdrant.client.scroll(
+            points, _ = await asyncio.to_thread(
+                self.qdrant.client.scroll,
                 collection_name=self.qdrant.collection_name,
                 scroll_filter=models.Filter(
                     must=[
@@ -327,7 +335,8 @@ class LongTermMemory:
             )
 
             # 获取精确计数
-            count_result = self.qdrant.client.count(
+            count_result = await asyncio.to_thread(
+                self.qdrant.client.count,
                 collection_name=self.qdrant.collection_name,
                 count_filter=models.Filter(
                     must=[

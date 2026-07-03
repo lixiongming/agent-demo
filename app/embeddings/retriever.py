@@ -10,6 +10,7 @@
 - 当前仅支持向量检索
 """
 from typing import List, Dict, Any, Optional
+import asyncio
 import numpy as np
 import re
 from collections import defaultdict
@@ -74,9 +75,10 @@ class Retriever:
         query_embedding = await self.embedding_service.embed_text(query)
         
         # 向量检索
-        results = self.vector_store.search_by_similarity(
+        results = await asyncio.to_thread(
+            self.vector_store.search_by_similarity,
             query_embedding=query_embedding,
-            top_k=top_k * 2,  # 取更多结果用于重排序
+            top_k=top_k * 2,
             threshold=threshold,
             doc_type=doc_type
         )
@@ -192,7 +194,7 @@ class Retriever:
         
         return filtered
     
-    def batch_retrieve(
+    async def batch_retrieve(
         self,
         queries: List[str],
         top_k: int = None
@@ -206,9 +208,7 @@ class Retriever:
         Returns:
             查询结果字典
         """
-        results = {}
+        tasks = [self.retrieve(query, top_k=top_k) for query in queries]
+        results_list = await asyncio.gather(*tasks)
         
-        for query in queries:
-            results[query] = self.retrieve(query, top_k=top_k)
-        
-        return results
+        return dict(zip(queries, results_list))

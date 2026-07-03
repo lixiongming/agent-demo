@@ -13,6 +13,7 @@
 """
 from typing import List, Optional, Dict, Any
 import numpy as np
+from collections import OrderedDict
 import hashlib
 import json
 import httpx
@@ -32,6 +33,8 @@ class ZhipuEmbeddingService:
     - 批量处理优化
     - 向量缓存机制
     """
+    
+    MAX_CACHE_SIZE = 10000
     
     def __init__(
         self,
@@ -60,7 +63,7 @@ class ZhipuEmbeddingService:
         self.embedding_dim = 2048  # embedding-3 的实际维度
         
         # 向量缓存
-        self._cache: Dict[str, np.ndarray] = {}
+        self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
         
         # HTTP 客户端
         self.client = httpx.AsyncClient(timeout=30.0)
@@ -79,6 +82,7 @@ class ZhipuEmbeddingService:
         # 检查缓存
         cache_key = self._get_cache_key(text)
         if self.cache_enabled and cache_key in self._cache:
+            self._cache.move_to_end(cache_key)
             return self._cache[cache_key]
         
         # 调用智谱 AI API
@@ -87,6 +91,9 @@ class ZhipuEmbeddingService:
         # 缓存
         if self.cache_enabled:
             self._cache[cache_key] = embedding[0]
+            self._cache.move_to_end(cache_key)
+            if len(self._cache) > self.MAX_CACHE_SIZE:
+                self._cache.popitem(last=False)
         
         return embedding[0]
     
@@ -107,6 +114,7 @@ class ZhipuEmbeddingService:
         for i, text in enumerate(texts):
             cache_key = self._get_cache_key(text)
             if self.cache_enabled and cache_key in self._cache:
+                self._cache.move_to_end(cache_key)
                 embeddings.append(self._cache[cache_key])
             else:
                 uncached_texts.append(text)
@@ -122,6 +130,9 @@ class ZhipuEmbeddingService:
                 if self.cache_enabled:
                     cache_key = self._get_cache_key(text)
                     self._cache[cache_key] = embedding
+                    self._cache.move_to_end(cache_key)
+                    if len(self._cache) > self.MAX_CACHE_SIZE:
+                        self._cache.popitem(last=False)
                 embeddings.append(embedding)
         
         # 按原始顺序排列

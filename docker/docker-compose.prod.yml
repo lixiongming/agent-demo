@@ -125,14 +125,14 @@ services:
         max-size: "50m"
         max-file: "3"
 
-  # Redis 缓存
+  # Redis 缓存（RDB+AOF混合持久化，启动快且数据安全）
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     volumes:
       - ../data/volumes/redis:/data
-    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --aof-use-rdb-preamble yes --appendfsync everysec --save 900 1 --save 300 10 --save 60 10000 --maxmemory 1gb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s

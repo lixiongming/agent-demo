@@ -8,7 +8,7 @@
 """
 import threading
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from app.agent.checkpoint import get_checkpointer
 from app.agent.state import AgentState, ChatState
 from app.agent.nodes import (
     agent_node, tool_node, chat_node, error_handler_node,
@@ -23,7 +23,7 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# 线程安全的全局实例
+# 线程安全的全局实例（只声明一次）
 _agent_app = None
 _chat_app = None
 _react_app = None
@@ -76,7 +76,7 @@ def create_agent_graph():
     )
     
     # 编译图（带checkpointer）
-    checkpointer = MemorySaver()
+    checkpointer = get_checkpointer()
     app = workflow.compile(checkpointer=checkpointer)
     
     logger.info("Agent graph compiled")
@@ -151,7 +151,7 @@ def create_chat_graph():
     workflow.add_edge("memory_integrate", END)
     
     # ===== 编译 =====
-    checkpointer = MemorySaver()
+    checkpointer = get_checkpointer()
     app = workflow.compile(checkpointer=checkpointer)
     
     logger.info("Chat graph compiled (大厂标准: Function Calling + ToolMessage + Memory)")
@@ -207,18 +207,11 @@ def create_react_graph():
     workflow.add_edge("save_message", END)
     
     # ===== 编译 =====
-    checkpointer = MemorySaver()
+    checkpointer = get_checkpointer()
     app = workflow.compile(checkpointer=checkpointer)
     
     logger.info("ReAct graph compiled (大厂标准: 多轮工具调用)")
     return app
-
-
-# 全局图实例（线程安全）
-_agent_app = None
-_chat_app = None
-_react_app = None
-_lock = threading.Lock()
 
 
 def get_agent_app():

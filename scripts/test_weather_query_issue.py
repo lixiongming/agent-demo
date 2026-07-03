@@ -14,7 +14,7 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 from app.agent.smart_router import smart_route
-from app.tools.tool_registry import tool_registry
+from app.tools.tool_definitions import tool_registry
 
 
 async def test_weather_query():

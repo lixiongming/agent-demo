@@ -101,9 +101,12 @@ class SessionService:
         # 统计总数
         total = await self.session_repo.count(status)
         
+        # 批量获取消息数量（避免 N+1 查询）
+        session_ids = [session.id for session in sessions]
+        message_counts = await self.message_repo.count_by_sessions(session_ids)
+
         items = []
         for session in sessions:
-            message_count = await self.message_repo.count_by_session(session.id)
             items.append({
                 "session_id": session.session_id,
                 "agent_type": session.agent_type,
@@ -111,7 +114,7 @@ class SessionService:
                 "status": session.status,
                 "created_at": session.created_at,
                 "updated_at": session.updated_at,
-                "message_count": message_count
+                "message_count": message_counts.get(session.id, 0)
             })
         
         return {
@@ -135,19 +138,21 @@ class SessionService:
         }
     
     async def delete(self, session_id: str) -> bool:
-        """删除会话"""
+        """删除会话（事务保证一致性）"""
         session = await self.session_repo.get_by_id(session_id)
         
         if not session:
             return False
         
-        # 删除消息
-        await self.message_repo.delete_by_session(session.id)
-        
-        # 删除会话
-        success = await self.session_repo.delete(session_id)
-        
-        if success:
-            logger.info(f"Session deleted: {session_id}")
-        
-        return success
+        try:
+            # 在同一事务中删除消息和会话
+            await self.message_repo.delete_by_session(session.id)
+            success = await self.session_repo.delete(session_id)
+            
+            if success:
+                logger.info(f"Session deleted: {session_id}")
+            
+            return success
+        except Exception as e:
+            logger.error(f"Session delete failed: {e}")
+            raise

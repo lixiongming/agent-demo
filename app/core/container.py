@@ -6,6 +6,7 @@
 - 动态替换
 - 测试友好
 """
+import threading
 from typing import Type, Dict, Any, Callable, Optional
 from app.core.logger import get_logger
 
@@ -39,6 +40,7 @@ class DIContainer:
     _bindings: Dict[Type, Type] = {}
     _factories: Dict[Type, Callable] = {}
     _singletons: Dict[str, Any] = {}
+    _lock = threading.Lock()
     
     @classmethod
     def bind(cls, interface: Type, implementation: Type):
@@ -48,8 +50,9 @@ class DIContainer:
             interface: 接口类型
             implementation: 实现类型
         """
-        cls._bindings[interface] = implementation
-        logger.debug(f"DI: Bound {interface.__name__} -> {implementation.__name__}")
+        with cls._lock:
+            cls._bindings[interface] = implementation
+            logger.debug(f"DI: Bound {interface.__name__} -> {implementation.__name__}")
     
     @classmethod
     def bind_factory(cls, interface: Type, factory: Callable):
@@ -59,8 +62,9 @@ class DIContainer:
             interface: 接口类型
             factory: 工厂函数
         """
-        cls._factories[interface] = factory
-        logger.debug(f"DI: Bound {interface.__name__} -> factory")
+        with cls._lock:
+            cls._factories[interface] = factory
+            logger.debug(f"DI: Bound {interface.__name__} -> factory")
     
     @classmethod
     def get(cls, interface: Type) -> Any:
@@ -72,30 +76,31 @@ class DIContainer:
         Returns:
             服务实例
         """
-        # 检查缓存
-        if interface in cls._services:
-            return cls._services[interface]
-        
-        # 使用工厂
-        if interface in cls._factories:
-            instance = cls._factories[interface]()
-            cls._services[interface] = instance
-            return instance
-        
-        # 使用绑定
-        if interface in cls._bindings:
-            implementation = cls._bindings[interface]
-            instance = implementation()
-            cls._services[interface] = instance
-            return instance
-        
-        # 直接创建
-        try:
-            instance = interface()
-            cls._services[interface] = instance
-            return instance
-        except TypeError:
-            raise ValueError(f"Cannot create instance of {interface.__name__}. Please bind it first.")
+        with cls._lock:
+            # 检查缓存
+            if interface in cls._services:
+                return cls._services[interface]
+
+            # 使用工厂
+            if interface in cls._factories:
+                instance = cls._factories[interface]()
+                cls._services[interface] = instance
+                return instance
+
+            # 使用绑定
+            if interface in cls._bindings:
+                implementation = cls._bindings[interface]
+                instance = implementation()
+                cls._services[interface] = instance
+                return instance
+
+            # 直接创建
+            try:
+                instance = interface()
+                cls._services[interface] = instance
+                return instance
+            except TypeError:
+                raise ValueError(f"Cannot create instance of {interface.__name__}. Please bind it first.")
     
     @classmethod
     def register_singleton(cls, name: str, instance: Any):
@@ -105,8 +110,9 @@ class DIContainer:
             name: 名称
             instance: 实例
         """
-        cls._singletons[name] = instance
-        logger.debug(f"DI: Registered singleton '{name}'")
+        with cls._lock:
+            cls._singletons[name] = instance
+            logger.debug(f"DI: Registered singleton '{name}'")
     
     @classmethod
     def get_singleton(cls, name: str) -> Optional[Any]:
@@ -118,7 +124,8 @@ class DIContainer:
         Returns:
             实例
         """
-        return cls._singletons.get(name)
+        with cls._lock:
+            return cls._singletons.get(name)
     
     @classmethod
     def has(cls, interface: Type) -> bool:
@@ -130,30 +137,34 @@ class DIContainer:
         Returns:
             是否存在
         """
-        return interface in cls._services or interface in cls._bindings or interface in cls._factories
+        with cls._lock:
+            return interface in cls._services or interface in cls._bindings or interface in cls._factories
     
     @classmethod
     def clear(cls):
         """清除所有服务（测试用）"""
-        cls._services.clear()
-        cls._bindings.clear()
-        cls._factories.clear()
-        cls._singletons.clear()
-        logger.debug("DI: All services cleared")
+        with cls._lock:
+            cls._services.clear()
+            cls._bindings.clear()
+            cls._factories.clear()
+            cls._singletons.clear()
+            logger.debug("DI: All services cleared")
     
     @classmethod
     def clear_services(cls):
         """只清除服务实例（保留绑定）"""
-        cls._services.clear()
-        logger.debug("DI: Service instances cleared")
+        with cls._lock:
+            cls._services.clear()
+            logger.debug("DI: Service instances cleared")
     
     @classmethod
     def get_bindings_info(cls) -> Dict[str, str]:
         """获取绑定信息"""
-        return {
-            interface.__name__: impl.__name__
-            for interface, impl in cls._bindings.items()
-        }
+        with cls._lock:
+            return {
+                interface.__name__: impl.__name__
+                for interface, impl in cls._bindings.items()
+            }
 
 
 def setup_container(collection_name: str = "knowledge_base", use_memory: bool = False):

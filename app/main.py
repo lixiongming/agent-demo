@@ -11,6 +11,7 @@ if sys.platform == 'win32':
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+import asyncio
 import json
 
 from app.config import get_settings
@@ -42,6 +43,11 @@ async def lifespan(app: FastAPI):
     # 启动
     setup_logging()
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
+
+    # 生产环境配置校验
+    warnings = settings.validate_production_config()
+    for w in warnings:
+        logger.warning(f"[配置警告] {w}")
     
     # 配置依赖注入容器
     from app.core.container import setup_container
@@ -59,8 +65,25 @@ async def lifespan(app: FastAPI):
     await close_db()
     await close_redis()
     
-    # 清理容器
+    # 关闭 RerankService HTTP 客户端
+    from app.services.rerank import shutdown_rerank_service
+    await shutdown_rerank_service()
+
+    # 关闭 Embedding 服务 HTTP 客户端
     from app.core.container import DIContainer
+    from app.core.interfaces import IEmbeddingService
+    if DIContainer.has(IEmbeddingService):
+        embedding_service = DIContainer.get(IEmbeddingService)
+        if hasattr(embedding_service, 'close'):
+            await embedding_service.close()
+
+    # 关闭 Qdrant 客户端
+    from app.core.interfaces import IVectorStore
+    if DIContainer.has(IVectorStore):
+        vs = DIContainer.get(IVectorStore)
+        if hasattr(vs, 'close'):
+            await asyncio.to_thread(vs.close)
+    
     DIContainer.clear()
     
     logger.info("Application shutdown")
@@ -73,8 +96,13 @@ def create_app() -> FastAPI:
         version=settings.APP_VERSION,
         description="LangGraph + FastAPI Agent Service",
         lifespan=lifespan,
-        default_response_class=UnicodeJSONResponse  # 使用自定义JSON响应
+        default_response_class=UnicodeJSONResponse,
+        docs_url="/docs",
+        redoc_url="/redoc",
     )
+    
+    # 注册全局异常处理器
+    _register_exception_handlers(app)
     
     # 配置中间件
     setup_middlewares(app)
@@ -88,11 +116,55 @@ def create_app() -> FastAPI:
         return {
             "name": settings.APP_NAME,
             "version": settings.APP_VERSION,
+            "health": f"{settings.API_PREFIX}/health/health",
             "docs": "/docs",
-            "health": f"{settings.API_PREFIX}/health/health"
         }
     
     return app
+
+
+def _register_exception_handlers(app: FastAPI):
+    """注册全局异常处理器
+    
+    将领域异常统一转换为 HTTP 响应，遵循分层原则：
+    - 异常层不耦合 HTTP 框架
+    - API 层负责异常 → HTTP 响应的转换
+    """
+    from app.core.exceptions import AgentException
+    from app.core.error_codes import APIError
+    
+    @app.exception_handler(AgentException)
+    async def agent_exception_handler(request, exc: AgentException):
+        """处理所有业务异常"""
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.details if exc.details else None
+            }
+        )
+    
+    @app.exception_handler(APIError)
+    async def api_error_handler(request, exc: APIError):
+        """处理 API 错误码异常"""
+        logger.error(f"APIError: {exc.to_internal_dict()}")
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=exc.to_dict()
+        )
+    
+    @app.exception_handler(Exception)
+    async def generic_exception_handler(request, exc: Exception):
+        """处理未捕获的异常（不泄露内部信息）"""
+        logger.error(f"Unhandled exception: {exc}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "code": "INTERNAL_ERROR",
+                "message": "服务内部错误，请稍后重试"
+            }
+        )
 
 
 # 创建应用实例

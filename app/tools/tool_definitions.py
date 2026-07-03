@@ -1,7 +1,7 @@
-"""工具注册中心
+"""工具定义模块
 
-管理所有工具的描述、参数和执行逻辑
-符合大厂标准：工具描述驱动，LLM自动决策
+管理所有工具的描述和参数定义（用于 LLM Function Calling）
+注意：工具执行注册在 registry.py 的 ToolRegistry 中
 """
 from typing import Dict, Any, List, Optional
 from app.core.logger import get_logger
@@ -82,7 +82,7 @@ class ToolDefinition:
 """
 
 
-class ToolRegistry:
+class ToolDefinitionRegistry:
     """工具注册中心
     
     管理所有工具，提供工具查询和执行功能
@@ -291,4 +291,4 @@ class ToolRegistry:
 
 
 # 全局工具注册中心
-tool_registry = ToolRegistry()
+tool_registry = ToolDefinitionRegistry()

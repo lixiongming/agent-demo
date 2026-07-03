@@ -70,14 +70,14 @@ services:
     networks:
       - agent_network
 
-  # MySQL（使用 3307 端口避免与本地 MySQL 冲突）
+  # MySQL
   mysql:
     image: mysql:8.0
     environment:
       - MYSQL_ROOT_PASSWORD=123456
       - MYSQL_DATABASE=agent_db
     ports:
-      - "3307:3306"
+      - "3306:3306"
     volumes:
       - ../data/volumes/mysql:/var/lib/mysql
       # 不再挂载 SQL 文件，让 init_db() 自动创建表结构（与本地一致）
@@ -90,14 +90,12 @@ services:
     networks:
       - agent_network
 
-  # Redis
+  # Redis（纯缓存模式，不依赖本地持久化，数据可靠性由 DB 保证）
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
-    volumes:
-      - ../data/volumes/redis:/data
-    command: redis-server --appendonly yes
+    command: redis-server --save "" --appendonly no
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s

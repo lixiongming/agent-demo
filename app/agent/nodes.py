@@ -10,17 +10,37 @@ from typing import Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from app.agent.state import AgentState, ChatState
 from app.llm.factory import get_llm
-from app.tools.registry import ToolRegistry
 from app.core.logger import get_logger
 from app.core.container import DIContainer
 from app.core.interfaces import IRAGService
 from app.core.tracing import tracer, SpanStatus
-from app.core.audit import AuditLogger
 from app.config import get_settings
 import time
 
 logger = get_logger(__name__)
 settings = get_settings()
+
+# 模块级单例（避免每次调用新建实例）
+_audit_logger = None
+_tool_registry = None
+
+
+def _get_audit_logger():
+    """获取审计日志单例"""
+    global _audit_logger
+    if _audit_logger is None:
+        from app.core.audit import AuditLogger
+        _audit_logger = AuditLogger()
+    return _audit_logger
+
+
+def _get_tool_registry():
+    """获取工具注册表单例"""
+    global _tool_registry
+    if _tool_registry is None:
+        from app.tools.registry import ToolRegistry
+        _tool_registry = ToolRegistry()
+    return _tool_registry
 
 
 def get_rag_service():
@@ -197,7 +217,7 @@ async def tool_decision_node(state: ChatState) -> Dict[str, Any]:
             }
         
         # 审计日志
-        audit_logger = AuditLogger()
+        audit_logger = _get_audit_logger()
         current_input = state.get("current_input", "")
         user_id = state.get("user_id")
         
@@ -241,11 +261,11 @@ async def tool_execute_node(state: ChatState) -> Dict[str, Any]:
             return {"tool_used": False}
         
         # 审计日志
-        audit_logger = AuditLogger()
+        audit_logger = _get_audit_logger()
         user_id = state.get("user_id")
         session_id = state.get("session_id", "")
         
-        tool_registry = ToolRegistry()
+        tool_registry = _get_tool_registry()
         tool_messages = []
         tool_results = []
         
@@ -255,14 +275,16 @@ async def tool_execute_node(state: ChatState) -> Dict[str, Any]:
             tool_call_id = tool_call.get("id", f"call_{int(time.time()*1000)}")
             
             span.set_attribute("tool_name", tool_name)
-            span.set_attribute("tool_args", str(tool_args))
+            span.set_attribute("tool_args_keys", str(list(tool_args.keys())))
             
             # 权限检查
             if not tool_registry.check_permission(tool_name, user_id):
                 logger.warning(f"Tool {tool_name} permission denied for user {user_id}")
-                audit_logger.log_tool_permission_denied(
+                audit_logger.log_permission_check(
                     user_id=user_id,
-                    tool_name=tool_name,
+                    permission="tool_call",
+                    resource=tool_name,
+                    granted=False,
                     reason="权限不足"
                 )
                 
@@ -396,7 +418,7 @@ async def react_agent_node(state: ChatState) -> Dict[str, Any]:
             messages.append(HumanMessage(content=current_input))
         
         # 获取工具并绑定到 LLM
-        from app.tools.tool_registry import tool_registry
+        from app.tools.tool_definitions import tool_registry
         tools = tool_registry.get_openai_tools()
         
         llm = get_llm(settings.DEFAULT_MODEL)
@@ -453,8 +475,8 @@ async def react_tool_execute_node(state: ChatState) -> Dict[str, Any]:
         if not tool_calls:
             return {"messages": messages}
         
-        tool_registry = ToolRegistry()
-        audit_logger = AuditLogger()
+        tool_registry = _get_tool_registry()
+        audit_logger = _get_audit_logger()
         user_id = state.get("user_id")
         session_id = state.get("session_id", "")
         
@@ -631,7 +653,7 @@ async def load_history_node(state: ChatState) -> Dict[str, Any]:
                     )
                     logger.info(f"Session created: {session_id}")
                 
-                history = await message_repo.get_recent(session.id, limit=20)
+                history = await message_repo.get_recent(session.id, limit=settings.HISTORY_LIMIT)
                 
                 messages = []
                 
@@ -774,7 +796,7 @@ async def tool_node(state: AgentState) -> Dict[str, Any]:
         return state
     
     tool_calls = outcome.get("data", [])
-    tool_registry = ToolRegistry()
+    tool_registry = _get_tool_registry()
     
     messages = []
     
@@ -924,25 +946,30 @@ async def memory_forgetting_node(state: AgentState) -> Dict[str, Any]:
     
     try:
         from app.memory import ForgettingManager
-        from app.db.database import AsyncSessionLocal
-        
-        async with AsyncSessionLocal() as db:
-            manager = ForgettingManager(session_id, db)
-            
-            # 执行遗忘周期
-            result = await manager.run_forgetting_cycle()
-            
-            logger.info(
-                f"[遗忘周期] 完成: "
-                f"decayed={result.get('decay', {}).get('decayed_count', 0)}, "
-                f"evicted={result.get('evict', {}).get('evicted_count', 0)}"
-            )
-        
+        from app.memory.long_term import LongTermMemory
+
+        # 创建 LongTermMemory 以获取 Qdrant 实例
+        long_term = LongTermMemory(session_id)
+
+        manager = ForgettingManager(
+            session_id,
+            qdrant_store=long_term.qdrant,
+        )
+
+        # 执行遗忘周期
+        result = await manager.run_forgetting_cycle()
+
+        logger.info(
+            f"[遗忘周期] 完成: "
+            f"decayed={result.get('decay', {}).get('decayed_count', 0)}, "
+            f"evicted={result.get('evict', {}).get('evicted_count', 0)}"
+        )
+
         return {
             "forgetting_cycle_run": True,
             "forgetting_result": result
         }
-    
+
     except Exception as e:
         logger.error(f"[遗忘周期] 失败: {e}")
         return state

@@ -6,6 +6,7 @@ from langchain_core.language_models import BaseChatModel
 from app.config import get_settings
 from app.core.logger import get_logger
 from app.core.exceptions import LLMException
+from app.llm.callbacks import LLMCallbackHandler
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -55,6 +56,7 @@ class LLMFactory:
             
             # 创建实例
             try:
+                callback_handler = LLMCallbackHandler()
                 llm = ChatOpenAI(
                     model=model,
                     temperature=temp,
@@ -63,6 +65,7 @@ class LLMFactory:
                     base_url=settings.DASHSCOPE_BASE_URL,
                     request_timeout=60,  # 请求超时 60 秒
                     max_retries=2,  # 最大重试次数
+                    callbacks=[callback_handler],
                     **kwargs
                 )
                 
@@ -107,7 +110,11 @@ def get_llm_with_tools(
     model_name: Optional[str] = None,
     tools: list = None
 ) -> BaseChatModel:
-    """获取带工具绑定的LLM"""
+    """获取带工具绑定的LLM
+    
+    注意：bind_tools() 返回新的 RunnableBinding 实例，
+    不会修改缓存的原始 LLM 实例，缓存安全。
+    """
     llm = get_llm(model_name)
     
     if tools:

@@ -587,7 +587,7 @@ class ToolRegistry:
                 logger.debug(f"[工具定义] {name}: properties={properties}, required={required}")
             
             tools.append(tool_def)
-            logger.info(f"[工具定义] {name}: description={description[:100]}...")
+            logger.debug(f"[工具定义] {name}: description={description[:100]}...")
         
         return tools
 

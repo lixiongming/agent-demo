@@ -29,9 +29,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
+from qdrant_client.http.models import PointStruct
 from app.core.logger import get_logger
 from app.config import get_settings
+from app.embeddings.qdrant_store import QdrantVectorStore, _generate_int_id
 import json
+import asyncio
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -67,7 +70,8 @@ class ConflictResolver:
         self,
         llm: BaseChatModel,
         db: Optional[AsyncSession] = None,
-        confidence_threshold: float = 0.7
+        confidence_threshold: float = 0.7,
+        qdrant_store: Optional[QdrantVectorStore] = None
     ):
         """初始化冲突修正器
         
@@ -75,10 +79,12 @@ class ConflictResolver:
             llm: 语言模型（用于事实提取和冲突检测）
             db: 数据库会话
             confidence_threshold: 置信度阈值
+            qdrant_store: Qdrant 向量存储实例（用于更新长期记忆 payload）
         """
         self.llm = llm
         self.db = db
         self.confidence_threshold = confidence_threshold
+        self.qdrant_store = qdrant_store
         
         # 统计
         self.stats = {
@@ -322,21 +328,10 @@ class ConflictResolver:
             resolution = await self.resolve_conflict(conflict)
             
             # 执行更新（如果需要）
-            if resolution["action"] == "update" and self.db:
+            if resolution["action"] == "update":
                 existing_id = conflict["existing_fact"]["id"]
                 new_fact = conflict["new_fact"]
-                
-                # 更新数据库
-                update_query = text("""
-                    UPDATE long_term_memory
-                    SET content = :content,
-                        metadata = :metadata,
-                        confidence = :confidence,
-                        updated_at = NOW(),
-                        version = version + 1
-                    WHERE id = :id
-                """)
-                
+
                 new_content = f"{new_fact['fact_key']}: {new_fact['fact_value']}"
                 new_metadata = {
                     "fact_type": new_fact["fact_type"],
@@ -345,22 +340,78 @@ class ConflictResolver:
                     "confidence": new_fact["confidence"],
                     "source": new_fact.get("source", "用户陈述")
                 }
-                
-                await self.db.execute(
-                    update_query,
-                    {
-                        "id": existing_id,
-                        "content": new_content,
-                        "metadata": json.dumps(new_metadata),
-                        "confidence": new_fact["confidence"]
-                    }
-                )
-                
-                await self.db.commit()
-                
-                self.stats["facts_updated"] += 1
-                
-                logger.info(f"事实已更新: id={existing_id}, 新值={new_fact['fact_value']}")
+
+                if self.qdrant_store:
+                    # 通过 Qdrant 更新 payload
+                    point_id = _generate_int_id(str(existing_id))
+
+                    # 获取现有点的向量（upsert 需要向量）
+                    existing_points = await asyncio.to_thread(
+                        self.qdrant_store.client.retrieve,
+                        collection_name=self.qdrant_store.collection_name,
+                        ids=[point_id],
+                        with_payload=True,
+                        with_vectors=True,
+                    )
+
+                    if existing_points:
+                        existing_point = existing_points[0]
+                        existing_payload = existing_point.payload or {}
+
+                        # 更新 payload 中的字段
+                        updated_payload = {
+                            **existing_payload,
+                            "content": new_content,
+                            "metadata": json.dumps(new_metadata),
+                            "confidence": new_fact["confidence"],
+                            "version": existing_payload.get("version", 0) + 1,
+                            "updated_at": datetime.now().isoformat(),
+                        }
+
+                        # 使用 upsert 更新点（保留原向量）
+                        await asyncio.to_thread(
+                            self.qdrant_store.client.upsert,
+                            collection_name=self.qdrant_store.collection_name,
+                            points=[
+                                PointStruct(
+                                    id=point_id,
+                                    vector=existing_point.vector,
+                                    payload=updated_payload,
+                                )
+                            ],
+                        )
+
+                        self.stats["facts_updated"] += 1
+                        logger.info(f"事实已更新(Qdrant): id={existing_id}, 新值={new_fact['fact_value']}")
+                    else:
+                        logger.warning(f"Qdrant 中未找到点: id={existing_id}, point_id={point_id}")
+
+                elif self.db:
+                    # 向后兼容：通过 MySQL 更新
+                    update_query = text("""
+                        UPDATE long_term_memory
+                        SET content = :content,
+                            metadata = :metadata,
+                            confidence = :confidence,
+                            updated_at = NOW(),
+                            version = version + 1
+                        WHERE id = :id
+                    """)
+
+                    await self.db.execute(
+                        update_query,
+                        {
+                            "id": existing_id,
+                            "content": new_content,
+                            "metadata": json.dumps(new_metadata),
+                            "confidence": new_fact["confidence"]
+                        }
+                    )
+
+                    await self.db.commit()
+
+                    self.stats["facts_updated"] += 1
+                    logger.info(f"事实已更新(MySQL): id={existing_id}, 新值={new_fact['fact_value']}")
             
             resolved_actions.append({
                 "conflict": conflict,

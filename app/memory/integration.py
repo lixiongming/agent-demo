@@ -80,7 +80,10 @@ class MemoryIntegrator:
         self.llm = llm
         self.db = db
         self.embedding_model = embedding_model or get_embedding_service()
-        
+
+        # LongTermMemory 实例缓存（避免每次存储创建新实例）
+        self._ltm_cache: Dict[str, Any] = {}
+
         # 统计
         self.stats = {
             "facts_extracted": 0,
@@ -312,112 +315,149 @@ class MemoryIntegrator:
         similarity_threshold: float = 0.9
     ) -> List[Dict[str, Any]]:
         """压缩相似记忆
-        
-        合理相似度高的记忆，减少冗余
-        
+
+        合并相似度高的记忆，减少冗余。
+        优化：批量嵌入 + 向量化相似度计算。
+
         Args:
             memories: 记忆列表
             similarity_threshold: 相似度阈值
-            
+
         Returns:
             压缩后的记忆列表
         """
         if len(memories) < 2:
             return memories
-        
+
         compressed = []
         merged_count = 0
-        
-        # 获取所有记忆的向量
-        memory_embeddings = []
-        for memory in memories:
-            content = memory.get("content", "")
-            if content:
-                embedding = await self.embedding_model.embed_text(content)
-                memory_embeddings.append(embedding)
-            else:
-                memory_embeddings.append(None)
-        
-        # 检查相似度
+
+        # 批量获取所有记忆的向量（避免逐个调用）
+        contents = [m.get("content", "") for m in memories]
+        non_empty_indices = [i for i, c in enumerate(contents) if c]
+
+        if not non_empty_indices:
+            return memories
+
+        # 批量嵌入
+        non_empty_contents = [contents[i] for i in non_empty_indices]
+        try:
+            embeddings = await self.embedding_model.embed_texts(non_empty_contents)
+        except Exception as e:
+            logger.warning(f"批量嵌入失败，回退逐个嵌入: {e}")
+            embeddings = []
+            for content in non_empty_contents:
+                try:
+                    emb = await self.embedding_model.embed_text(content)
+                    embeddings.append(emb)
+                except Exception:
+                    embeddings.append(None)
+
+        # 构建嵌入映射（index -> embedding）
+        memory_embeddings = [None] * len(memories)
+        for idx, emb_idx in enumerate(non_empty_indices):
+            if idx < len(embeddings):
+                memory_embeddings[emb_idx] = embeddings[idx]
+
+        # 检查相似度（使用向量化计算优化）
         merged_indices = set()
-        
-        for i, memory1 in enumerate(memories):
-            if i in merged_indices:
+
+        # 预计算所有有效嵌入的相似度矩阵
+        valid_pairs = []
+        for i in range(len(memories)):
+            if i in merged_indices or memory_embeddings[i] is None:
                 continue
-            
-            # 检查与其他记忆的相似度
-            for j, memory2 in enumerate(memories[i+1:], start=i+1):
-                if j in merged_indices:
+            for j in range(i + 1, len(memories)):
+                if j in merged_indices or memory_embeddings[j] is None:
                     continue
-                
-                # 计算相似度
-                emb1 = memory_embeddings[i]
-                emb2 = memory_embeddings[j]
-                
-                if emb1 and emb2:
-                    similarity = self._cosine_similarity(emb1, emb2)
-                    
-                    if similarity > similarity_threshold:
-                        # 合并记忆
-                        merged_memory = {
-                            "content": memory1.get("content"),  # 保留第一个
-                            "metadata": {
-                                "merged_from": [
-                                    memory1.get("id"),
-                                    memory2.get("id")
-                                ],
-                                "merge_similarity": similarity,
-                                "merge_time": datetime.now().isoformat()
-                            },
-                            "weight": max(
-                                memory1.get("weight", 1.0),
-                                memory2.get("weight", 1.0)
-                            ),
-                            "importance": max(
-                                memory1.get("importance", 1.0),
-                                memory2.get("importance", 1.0)
-                            )
-                        }
-                        
-                        compressed.append(merged_memory)
-                        merged_indices.add(i)
-                        merged_indices.add(j)
-                        merged_count += 1
-                        
-                        logger.info(
-                            f"记忆合并: similarity={similarity:.3f}, "
-                            f"ids={memory1.get('id')}, {memory2.get('id')}"
+                valid_pairs.append((i, j))
+
+        if valid_pairs:
+            import numpy as np
+
+            # 提取向量对
+            emb1_list = [memory_embeddings[i] for i, j in valid_pairs]
+            emb2_list = [memory_embeddings[j] for i, j in valid_pairs]
+
+            # 向量化计算余弦相似度
+            vec1 = np.array(emb1_list)
+            vec2 = np.array(emb2_list)
+
+            norms1 = np.linalg.norm(vec1, axis=1)
+            norms2 = np.linalg.norm(vec2, axis=1)
+
+            # 避免除零
+            mask = (norms1 > 0) & (norms2 > 0)
+            similarities = np.zeros(len(valid_pairs))
+            similarities[mask] = np.sum(vec1[mask] * vec2[mask], axis=1) / (norms1[mask] * norms2[mask])
+
+            # 处理相似度高的记忆对
+            for pair_idx, (i, j) in enumerate(valid_pairs):
+                if i in merged_indices or j in merged_indices:
+                    continue
+
+                similarity = float(similarities[pair_idx])
+
+                if similarity > similarity_threshold:
+                    merged_memory = {
+                        "content": memories[i].get("content"),
+                        "metadata": {
+                            "merged_from": [
+                                memories[i].get("id"),
+                                memories[j].get("id")
+                            ],
+                            "merge_similarity": similarity,
+                            "merge_time": datetime.now().isoformat()
+                        },
+                        "weight": max(
+                            memories[i].get("weight", 1.0),
+                            memories[j].get("weight", 1.0)
+                        ),
+                        "importance": max(
+                            memories[i].get("importance", 1.0),
+                            memories[j].get("importance", 1.0)
                         )
-        
+                    }
+
+                    compressed.append(merged_memory)
+                    merged_indices.add(i)
+                    merged_indices.add(j)
+                    merged_count += 1
+
+                    logger.info(
+                        f"记忆合并: similarity={similarity:.3f}, "
+                        f"ids={memories[i].get('id')}, {memories[j].get('id')}"
+                    )
+
         # 添加未合并的记忆
         for i, memory in enumerate(memories):
             if i not in merged_indices:
                 compressed.append(memory)
-        
+
         self.stats["memories_compressed"] += merged_count
-        
+
         logger.info(
             f"记忆压缩完成: 原始 {len(memories)} 条, "
             f"压缩后 {len(compressed)} 条, 合并 {merged_count} 条"
         )
-        
+
         return compressed
     
     def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
         """计算余弦相似度"""
         import numpy as np
-        
+
         vec1 = np.array(vec1)
         vec2 = np.array(vec2)
-        
+
         dot_product = np.dot(vec1, vec2)
         norm1 = np.linalg.norm(vec1)
         norm2 = np.linalg.norm(vec2)
-        
+
         if norm1 == 0 or norm2 == 0:
             return 0
-        
-        return dot_product / (norm1 * norm2)
+
+        return float(dot_product / (norm1 * norm2))
     
     async def integrate_conversation(
         self,
@@ -472,6 +512,7 @@ class MemoryIntegrator:
         """存储整合后的记忆
 
         使用 Qdrant 存储向量（而非 MySQL，MySQL 不支持向量操作）。
+        复用 LongTermMemory 实例避免重复创建连接。
 
         Args:
             fact: 事实信息
@@ -486,13 +527,15 @@ class MemoryIntegrator:
 
             # 生成向量
             embedding = await self.embedding_model.embed_text(content)
-            # numpy 数组转列表
             if hasattr(embedding, "tolist"):
                 embedding = embedding.tolist()
 
-            # 使用 LongTermMemory 存储到 Qdrant
-            from app.memory.long_term import LongTermMemory
-            ltm = LongTermMemory(session_id, self.db)
+            # 复用 LongTermMemory 实例
+            if session_id not in self._ltm_cache:
+                from app.memory.long_term import LongTermMemory
+                self._ltm_cache[session_id] = LongTermMemory(session_id, self.db)
+
+            ltm = self._ltm_cache[session_id]
 
             metadata = {
                 "fact_type": fact["fact_type"],

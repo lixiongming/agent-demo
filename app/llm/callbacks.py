@@ -11,53 +11,81 @@ settings = get_settings()
 
 class LLMCallbackHandler(BaseCallbackHandler):
     """LLM回调处理器
-    
+
     用于日志记录、性能监控和成本计算
+
+    线程安全：使用 run_id 隔离每次调用的状态
     """
-    
+
     def __init__(self):
-        self.start_time = None
-        self.token_count = 0
-        self.cost = 0.0
-    
+        self._call_contexts: Dict[str, Dict[str, Any]] = {}
+
+    def _get_context(self, run_id: str) -> Dict[str, Any]:
+        """获取调用上下文（按 run_id 隔离）"""
+        if run_id not in self._call_contexts:
+            self._call_contexts[run_id] = {
+                "start_time": None,
+                "token_count": 0,
+                "cost": 0.0
+            }
+        return self._call_contexts[run_id]
+
+    def _cleanup_context(self, run_id: str):
+        """清理调用上下文"""
+        self._call_contexts.pop(run_id, None)
+
     def on_llm_start(
         self,
         serialized: Dict[str, Any],
         prompts: List[str],
+        *,
+        run_id: str = "",
         **kwargs: Any
     ) -> None:
         """LLM开始调用"""
-        self.start_time = time.time()
-        logger.info(f"LLM started: {serialized.get('name', 'unknown')}")
-        logger.debug(f"Prompts: {prompts[:1]}")  # 只记录第一个
-    
+        ctx = self._get_context(run_id)
+        ctx["start_time"] = time.time()
+        logger.info(f"LLM started: {serialized.get('name', 'unknown')}, run_id={run_id}")
+        logger.debug(f"Prompts: {prompts[:1]}")
+
     def on_llm_end(
         self,
         response: Any,
+        *,
+        run_id: str = "",
         **kwargs: Any
     ) -> None:
         """LLM结束调用"""
-        elapsed = time.time() - self.start_time if self.start_time else 0
-        
+        ctx = self._get_context(run_id)
+        elapsed = time.time() - ctx["start_time"] if ctx["start_time"] else 0
+
         # 计算token
+        token_count = 0
         if hasattr(response, "llm_output"):
             token_usage = response.llm_output.get("token_usage", {})
-            self.token_count = token_usage.get("total_tokens", 0)
-        
+            token_count = token_usage.get("total_tokens", 0)
+            ctx["token_count"] = token_count
+
         logger.info(
-            f"LLM completed: "
-            f"tokens={self.token_count}, "
+            f"LLM completed: run_id={run_id}, "
+            f"tokens={token_count}, "
             f"time={elapsed:.2f}s"
         )
-    
+
+        # 清理上下文
+        self._cleanup_context(run_id)
+
     def on_llm_error(
         self,
         error: Exception,
+        *,
+        run_id: str = "",
         **kwargs: Any
     ) -> None:
         """LLM调用错误"""
-        logger.error(f"LLM error: {error}")
-    
+        logger.error(f"LLM error: run_id={run_id}, error={error}")
+        self._cleanup_context(run_id)
+
     def on_tool_start(
         self,
         serialized: Dict[str, Any],
@@ -67,7 +95,7 @@ class LLMCallbackHandler(BaseCallbackHandler):
         """工具开始执行"""
         logger.info(f"Tool started: {serialized.get('name', 'unknown')}")
         logger.debug(f"Input: {input_str}")
-    
+
     def on_tool_end(
         self,
         output: str,
@@ -75,7 +103,7 @@ class LLMCallbackHandler(BaseCallbackHandler):
     ) -> None:
         """工具执行结束"""
         logger.info(f"Tool completed: output={output[:100]}")
-    
+
     def on_tool_error(
         self,
         error: Exception,
@@ -83,7 +111,7 @@ class LLMCallbackHandler(BaseCallbackHandler):
     ) -> None:
         """工具执行错误"""
         logger.error(f"Tool error: {error}")
-    
+
     def on_chain_start(
         self,
         serialized: Dict[str, Any],
@@ -92,7 +120,7 @@ class LLMCallbackHandler(BaseCallbackHandler):
     ) -> None:
         """链开始"""
         logger.info(f"Chain started: {serialized.get('name', 'unknown')}")
-    
+
     def on_chain_end(
         self,
         outputs: Dict[str, Any],
@@ -108,6 +136,9 @@ class CostTracker(BaseCallbackHandler):
     # 价格表（每1000 tokens）
     PRICES = {
         "qwen3-max": {"input": 0.04, "output": 0.12},
+        "qwen-plus": {"input": 0.008, "output": 0.02},
+        "qwen-turbo": {"input": 0.002, "output": 0.006},
+        "qwen3.7-lite": {"input": 0.001, "output": 0.002},
         "gpt-4": {"input": 0.03, "output": 0.06},
         "gpt-3.5-turbo": {"input": 0.0015, "output": 0.002}
     }

@@ -12,8 +12,14 @@ pydantic-settings==2.14.1
 python-dotenv==1.2.2
 python-multipart==0.0.32
 
+# 认证
+PyJWT==2.10.1
+passlib==1.7.4
+bcrypt==4.3.0
+
 # 数据库
 sqlalchemy==2.0.50
+alembic==1.13.1
 aiomysql==0.3.2
 pymysql==1.2.0
 cryptography>=42.0.0          # MySQL 8.0 caching_sha2_password 认证所需
@@ -33,6 +39,7 @@ numpy==1.26.4                    # 必须小于 2.0，否则 torch 不兼容
 # 文档处理
 pypdf==6.13.0
 python-docx==1.2.0
+PyYAML==6.0.2
 
 # HTTP 客户端
 httpx==0.28.1

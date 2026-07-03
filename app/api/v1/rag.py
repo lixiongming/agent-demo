@@ -13,7 +13,7 @@ API 文档：
 - 所有接口都有清晰的请求参数定义
 - 访问 http://localhost:8888/docs 查看 Swagger 文档
 """
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Body, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Body, Request, Depends
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Any, Optional
 import os
@@ -37,6 +37,8 @@ from app.core.interfaces import IRAGService
 from app.core.rate_limit import rate_limit, rag_breaker
 from app.core.tracing import tracer
 from app.core.error_codes import ErrorCode, APIError
+from app.api.v1.admin import verify_admin_token
+from app.api.deps import get_current_user
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -61,6 +63,7 @@ def get_rag_service() -> RAGService:
     "/ingest/text",
     response_model=SuccessResponse,
     summary="文本入库",
+    dependencies=[Depends(verify_admin_token)],
     description="""
 将纯文本内容入库到向量数据库。
 
@@ -118,6 +121,7 @@ async def ingest_text(request: IngestTextRequest = Body(...)):
     "/ingest/file",
     response_model=SuccessResponse,
     summary="文件入库",
+    dependencies=[Depends(verify_admin_token)],
     description="""
 上传文件并入库到向量数据库。
 
@@ -196,6 +200,7 @@ async def ingest_file(
     "/ingest/directory",
     response_model=SuccessResponse,
     summary="批量目录入库",
+    dependencies=[Depends(verify_admin_token)],
     description="""
 批量入库指定目录下的所有文档。
 
@@ -284,7 +289,10 @@ async def ingest_directory(request: IngestDirectoryRequest = Body(...)):
 """
 )
 @rate_limit(key="rag_query", limit=200, period=60)  # 每分钟 200 次
-async def rag_query(request: RAGQueryRequest = Body(...)):
+async def rag_query(
+    request: RAGQueryRequest = Body(...),
+    user: dict = Depends(get_current_user),
+):
     """RAG查询接口"""
     async with tracer.span("rag_query"):
         service = get_rag_service()
@@ -337,7 +345,10 @@ async def rag_query(request: RAGQueryRequest = Body(...)):
 """
 )
 @rate_limit(key="rag_query_advanced", limit=200, period=60)  # 每分钟 200 次
-async def rag_query_advanced(request: RAGQueryWithFiltersRequest = Body(...)):
+async def rag_query_advanced(
+    request: RAGQueryWithFiltersRequest = Body(...),
+    user: dict = Depends(get_current_user),
+):
     """高级RAG查询接口 - 大厂标准实现"""
     async with tracer.span("rag_query_advanced"):
         service = get_rag_service()
@@ -378,6 +389,7 @@ async def rag_query_advanced(request: RAGQueryWithFiltersRequest = Body(...)):
     "/document/{doc_id}",
     response_model=SuccessResponse,
     summary="删除单个文档",
+    dependencies=[Depends(verify_admin_token)],
     description="""
 根据文档ID删除单个文档。
 
@@ -421,6 +433,7 @@ async def delete_document(doc_id: int):
     "/source/{source}",
     response_model=SuccessResponse,
     summary="按来源批量删除",
+    dependencies=[Depends(verify_admin_token)],
     description="""
 根据来源标识批量删除所有相关文档。
 
@@ -476,7 +489,7 @@ async def delete_by_source(source: str):
 - 检索器：top_k、阈值配置
 """
 )
-async def get_stats():
+async def get_stats(user: dict = Depends(get_current_user)):
     """获取统计信息"""
     service = get_rag_service()
     

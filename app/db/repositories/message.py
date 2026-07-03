@@ -87,6 +87,18 @@ class MessageRepository:
         )
         return result.scalar()
     
+    async def count_by_sessions(self, session_ids: List[int]) -> dict:
+        """批量统计多个会话的消息数（避免 N+1 查询）"""
+        from sqlalchemy import func
+        if not session_ids:
+            return {}
+        result = await self.db.execute(
+            select(Message.session_id, func.count(Message.id))
+            .where(Message.session_id.in_(session_ids))
+            .group_by(Message.session_id)
+        )
+        return {row[0]: row[1] for row in result.all()}
+    
     async def search(
         self,
         session_id: int,

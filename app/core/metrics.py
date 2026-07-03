@@ -39,7 +39,9 @@ class MetricsCollector:
     - 内存存储（简化版）
     - Prometheus 导出（可选）
     """
-    
+
+    MAX_LATENCY_SAMPLES = 1000
+
     def __init__(self):
         # 请求指标
         self._request_counts: Dict[str, int] = {}
@@ -56,7 +58,7 @@ class MetricsCollector:
         self._rag_searches: int = 0
         self._rag_hits: int = 0
         self._rag_misses: int = 0
-        self._rag_latencies: list = []
+        self._rag_latencies: list = []  # 使用 _append_latency_list 管理
         
         # DB 指标
         self._db_queries: Dict[str, int] = {}
@@ -66,7 +68,36 @@ class MetricsCollector:
         # 系统指标
         self._active_sessions: int = 0
         self._total_messages: int = 0
-    
+
+    def _append_latency(self, storage: Dict[str, list], key: str, value: float):
+        """向字典中的延迟列表追加值，超出上限时裁剪"""
+        if key not in storage:
+            storage[key] = []
+        storage[key].append(value)
+        if len(storage[key]) > self.MAX_LATENCY_SAMPLES:
+            storage[key] = storage[key][-self.MAX_LATENCY_SAMPLES:]
+
+    def _append_latency_list(self, latencies: list, value: float):
+        """向延迟列表追加值，超出上限时裁剪"""
+        latencies.append(value)
+        if len(latencies) > self.MAX_LATENCY_SAMPLES:
+            del latencies[:-self.MAX_LATENCY_SAMPLES]
+
+    @staticmethod
+    def _percentile(sorted_data: list, p: float) -> float:
+        """计算百分位数"""
+        if not sorted_data:
+            return 0
+        sorted_data = sorted(sorted_data)
+        k = (len(sorted_data) - 1) * p / 100
+        f = int(k)
+        c = f + 1
+        if c >= len(sorted_data):
+            return sorted_data[f]
+        d0 = sorted_data[f] * (c - k)
+        d1 = sorted_data[c] * (k - f)
+        return d0 + d1
+
     # ===== 请求指标 =====
     
     def record_request(
@@ -88,9 +119,7 @@ class MetricsCollector:
         self._request_counts[endpoint] = self._request_counts.get(endpoint, 0) + 1
         
         # 延迟
-        if endpoint not in self._request_latencies:
-            self._request_latencies[endpoint] = []
-        self._request_latencies[endpoint].append(latency)
+        self._append_latency(self._request_latencies, endpoint, latency)
         
         # 错误
         if not success:
@@ -109,6 +138,9 @@ class MetricsCollector:
                 "avg_latency": sum(latencies) / len(latencies) if latencies else 0,
                 "max_latency": max(latencies) if latencies else 0,
                 "min_latency": min(latencies) if latencies else 0,
+                "p50_latency": self._percentile(latencies, 50),
+                "p95_latency": self._percentile(latencies, 95),
+                "p99_latency": self._percentile(latencies, 99),
             }
         
         # 所有端点
@@ -118,6 +150,8 @@ class MetricsCollector:
             stats[ep] = {
                 "count": count,
                 "avg_latency": sum(latencies) / len(latencies) if latencies else 0,
+                "p50_latency": self._percentile(latencies, 50),
+                "p95_latency": self._percentile(latencies, 95),
                 "errors": sum(v for k, v in self._request_errors.items() if k.startswith(ep))
             }
         return stats
@@ -134,10 +168,8 @@ class MetricsCollector:
         """记录 LLM 调用"""
         self._llm_calls[model] = self._llm_calls.get(model, 0) + 1
         self._llm_tokens[model] = self._llm_tokens.get(model, 0) + tokens
-        
-        if model not in self._llm_latencies:
-            self._llm_latencies[model] = []
-        self._llm_latencies[model].append(latency)
+
+        self._append_latency(self._llm_latencies, model, latency)
         
         if not success:
             self._llm_errors[model] = self._llm_errors.get(model, 0) + 1
@@ -153,6 +185,8 @@ class MetricsCollector:
                 "calls": self._llm_calls.get(model, 0),
                 "tokens": self._llm_tokens.get(model, 0),
                 "avg_latency": sum(latencies) / len(latencies) if latencies else 0,
+                "p50_latency": self._percentile(latencies, 50),
+                "p95_latency": self._percentile(latencies, 95),
                 "errors": self._llm_errors.get(model, 0),
             }
         
@@ -163,6 +197,8 @@ class MetricsCollector:
                 "calls": calls,
                 "tokens": self._llm_tokens.get(m, 0),
                 "avg_latency": sum(latencies) / len(latencies) if latencies else 0,
+                "p50_latency": self._percentile(latencies, 50),
+                "p95_latency": self._percentile(latencies, 95),
                 "errors": self._llm_errors.get(m, 0),
             }
         return stats
@@ -183,7 +219,7 @@ class MetricsCollector:
         else:
             self._rag_misses += 1
         
-        self._rag_latencies.append(latency)
+        self._append_latency_list(self._rag_latencies, latency)
         
         logger.debug(f"RAG search recorded: latency={latency:.3f}s, hits={hits}")
     
@@ -196,6 +232,8 @@ class MetricsCollector:
             "misses": self._rag_misses,
             "hit_rate": self._rag_hits / self._rag_searches if self._rag_searches > 0 else 0,
             "avg_latency": avg_latency,
+            "p50_latency": self._percentile(self._rag_latencies, 50),
+            "p95_latency": self._percentile(self._rag_latencies, 95),
         }
     
     # ===== DB 指标 =====
@@ -208,10 +246,8 @@ class MetricsCollector:
     ):
         """记录数据库查询"""
         self._db_queries[operation] = self._db_queries.get(operation, 0) + 1
-        
-        if operation not in self._db_latencies:
-            self._db_latencies[operation] = []
-        self._db_latencies[operation].append(latency)
+
+        self._append_latency(self._db_latencies, operation, latency)
         
         if not success:
             self._db_errors[operation] = self._db_errors.get(operation, 0) + 1

@@ -7,14 +7,13 @@
 """
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, AsyncGenerator
-import numpy as np
 
 
 class IEmbeddingService(ABC):
     """向量嵌入服务接口"""
     
     @abstractmethod
-    def embed_text(self, text: str) -> np.ndarray:
+    async def embed_text(self, text: str) -> List[float]:
         """单个文本向量化
         
         Args:
@@ -26,7 +25,7 @@ class IEmbeddingService(ABC):
         pass
     
     @abstractmethod
-    def embed_texts(self, texts: List[str]) -> List[np.ndarray]:
+    async def embed_texts(self, texts: List[str]) -> List[List[float]]:
         """批量文本向量化
         
         Args:
@@ -50,7 +49,7 @@ class IVectorStore(ABC):
     async def add_document(
         self,
         content: str,
-        embedding: np.ndarray,
+        embedding: List[float],
         metadata: Dict[str, Any] = None,
         source: str = "",
         doc_type: str = "text"
@@ -87,7 +86,7 @@ class IVectorStore(ABC):
     @abstractmethod
     async def search(
         self,
-        query_embedding: np.ndarray,
+        query_embedding: List[float],
         top_k: int = 10,
         threshold: float = 0.0,
         doc_type: Optional[str] = None

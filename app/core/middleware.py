@@ -1,5 +1,6 @@
 """中间件"""
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 import time
@@ -71,35 +72,96 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """速率限制中间件"""
+    """速率限制中间件
+    
+    基于 Redis 滑动窗口算法，按客户端 IP 限流。
+    默认每分钟 60 次请求。
+    Redis 不可用时放行所有请求。
+    """
     
     def __init__(self, app, requests_per_minute: int = 60):
         super().__init__(app)
         self.requests_per_minute = requests_per_minute
-        self.requests = {}
+        self._limiter = None
+    
+    def _get_limiter(self):
+        """获取限流器实例（延迟初始化）"""
+        if self._limiter is None:
+            from app.core.rate_limit import RateLimiter
+            self._limiter = RateLimiter(default_limit=self.requests_per_minute, default_period=60)
+        return self._limiter
+    
+    def _get_client_ip(self, request: Request) -> str:
+        """获取客户端 IP"""
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        if request.client:
+            return request.client.host
+        return "unknown"
     
     async def dispatch(self, request: Request, call_next):
-        # TODO: 实现速率限制逻辑
+        limiter = self._get_limiter()
+        client_ip = self._get_client_ip(request)
+        key = f"ip:{client_ip}"
+        
+        try:
+            allowed, count, remaining = await limiter.is_allowed(
+                key, limit=self.requests_per_minute, period=60
+            )
+        except Exception:
+            # Redis 不可用时放行所有请求
+            logger.warning("Rate limiter unavailable, allowing request")
+            response = await call_next(request)
+            return response
+        
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "code": "4290",
+                    "message": "请求过于频繁，请稍后再试",
+                    "details": {
+                        "limit": self.requests_per_minute,
+                        "period": 60,
+                        "current_count": count,
+                    },
+                },
+                headers={
+                    "X-RateLimit-Limit": str(self.requests_per_minute),
+                    "X-RateLimit-Remaining": "0",
+                    "Retry-After": "60",
+                },
+            )
+        
         response = await call_next(request)
+        
+        # 添加限流信息到响应头
+        response.headers["X-RateLimit-Limit"] = str(self.requests_per_minute)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        
         return response
 
 
 def setup_middlewares(app):
     """配置中间件"""
-    
-    # CORS
+    from app.config import get_settings
+    settings = get_settings()
+
+    # CORS（通过环境变量 CORS_ORIGINS 配置）
+    cors_origins = settings.cors_origins_list
+    allow_credentials = cors_origins != ["*"]  # 生产环境指定域名时可启用 credentials
+
     app.add_middleware(
         CORSMiddleware,
-        # 只允许特定域名
-        # allow_origins=[
-        #     "https://your-domain.com",
-        #     "http://localhost:8888",  # 本地开发
-        # ],
-        allow_origins=["*"],
-        allow_credentials=False,  # 必须为 False 当 allow_origins=["*"]
+        allow_origins=cors_origins,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )
     
     # 日志
     app.add_middleware(LoggingMiddleware)
+
+    # 速率限制
+    app.add_middleware(RateLimitMiddleware, requests_per_minute=60)

@@ -18,9 +18,7 @@
 """
 
 import hashlib
-import json
-from typing import Optional, Dict, Any
-from functools import lru_cache
+from typing import Optional, Dict, Any, List
 from app.db.cache import get_redis, RedisCache
 from app.core.logger import get_logger
 
@@ -47,7 +45,7 @@ class CacheService:
     @staticmethod
     def _hash_key(key: str) -> str:
         """生成缓存键的哈希"""
-        return hashlib.md5(key.encode()).hexdigest()
+        return hashlib.sha256(key.encode()).hexdigest()[:32]
     
     @staticmethod
     def _check_memory_cache_size(cache: dict):
@@ -58,6 +56,26 @@ class CacheService:
             for key in keys_to_remove:
                 del cache[key]
             logger.info(f"Memory cache cleaned, removed {len(keys_to_remove)} items")
+    
+    @staticmethod
+    async def _scan_keys(pattern: str) -> List[str]:
+        """使用 SCAN 命令扫描匹配的键（生产安全，不阻塞 Redis）
+        
+        Args:
+            pattern: 匹配模式，如 "rag:*"
+        
+        Returns:
+            匹配的键列表
+        """
+        keys = []
+        try:
+            redis = await get_redis()
+            if redis:
+                async for key in redis.scan_iter(match=pattern, count=100):
+                    keys.append(key)
+        except Exception as e:
+            logger.warning(f"Redis scan error: {e}")
+        return keys
     
     # ===== RAG 缓存 =====
     
@@ -167,11 +185,12 @@ class CacheService:
         CacheService._route_cache.clear()
         
         try:
+            # 使用 SCAN 替代 KEYS（生产安全，不阻塞 Redis）
+            rag_keys = await CacheService._scan_keys("rag:*")
+            route_keys = await CacheService._scan_keys("route:*")
+            
             redis = await get_redis()
             if redis:
-                # 删除所有 rag:* 和 route:* 键
-                rag_keys = await redis.keys("rag:*")
-                route_keys = await redis.keys("route:*")
                 if rag_keys:
                     await redis.delete(*rag_keys)
                 if route_keys:

@@ -7,13 +7,17 @@
 | 特性 | 大厂标准 | 实现状态 |
 |------|----------|----------|
 | **Function Calling** | OpenAI/智谱原生支持 | ✅ bind_tools + tool_calls |
-| **智能路由** | 三级策略（关键词→规则→LLM） | ✅ 毫秒级响应 |
+| **智能路由** | 三级策略（规则→缓存→LLM） | ✅ LRU缓存 + TTL过期 |
 | **ReAct 循环** | 多轮工具调用 | ✅ 最大10次迭代 |
-| **记忆管理** | 遗忘机制 + 冲突修正 + 整合 | ✅ Google MemGPT 标准 |
+| **记忆管理** | 遗忘机制 + 冲突修正 + 整合 | ✅ Google MemGPT 标准（Qdrant存储） |
 | **Rerank 重排序** | Cross-Encoder 模型 | ✅ 智谱 bge-reranker |
-| **链路追踪** | OpenTelemetry Span | ✅ 全链路追踪 |
-| **限流熔断** | Circuit Breaker | ✅ 时间窗口限流 |
+| **链路追踪** | OpenTelemetry Span | ✅ 全链路追踪 + 容量上限 |
+| **限流熔断** | Circuit Breaker | ✅ 滑动窗口 + asyncio.Lock |
 | **审计日志** | 操作审计 + 安全审计 | ✅ 结构化记录 |
+| **统一异常体系** | AgentException 层级 | ✅ 全局异常处理器 |
+| **API 安全** | Admin Token + 端点认证 | ✅ hmac.compare_digest |
+| **事件循环安全** | asyncio.to_thread | ✅ 所有同步IO已包装 |
+| **资源生命周期** | 启动/关闭完整管理 | ✅ 连接池释放 |
 
 ---
 
@@ -170,21 +174,23 @@ langchain/
 │   ├── api/                    # API 接口层
 │   │   ├── v1/                 # v1 版本接口
 │   │   │   ├── chat.py         # 对话接口（流式）
-│   │   │   ├── rag.py          # RAG 查询接口
+│   │   │   ├── rag.py          # RAG 查询接口（写入需Admin认证）
 │   │   │   ├── sessions.py     # 会话管理
-│   │   │   └── health.py       # 健康检查
+│   │   │   ├── admin.py        # 管理接口（需Admin Token认证）
+│   │   │   └── health.py       # 健康检查（K8s探针）
 │   │   └── deps.py             # 依赖注入
 │   │
 │   ├── core/                   # 核心基础设施（生产级）
 │   │   ├── logger.py           # 日志管理（滚动 + 压缩 + 清理）
 │   │   ├── audit.py            # 审计日志（操作 + 安全）
-│   │   ├── tracing.py          # 链路追踪（OpenTelemetry）
-│   │   ├── rate_limit.py       # 限流（时间窗口）
+│   │   ├── tracing.py          # 链路追踪（容量上限 + 自动淘汰）
+│   │   ├── rate_limit.py       # 限流（滑动窗口 + UUID去重）+ 熔断（asyncio.Lock）
 │   │   ├── middleware.py       # 中间件（请求追踪）
-│   │   ├── metrics.py          # 监控指标
-│   │   ├── exceptions.py       # 异常定义
+│   │   ├── metrics.py          # 监控指标（延迟采样上限1000）
+│   │   ├── exceptions.py       # 统一异常体系（AgentException层级）
 │   │   ├── error_codes.py      # 错误码定义
-│   │   └── container.py        # 依赖注入容器
+│   │   ├── container.py        # 依赖注入容器（threading.Lock保护）
+│   │   └── interfaces.py       # 接口定义
 │   │
 │   ├── memory/                 # 记忆管理（大厂标准）
 │   │   ├── manager.py          # 记忆管理器（统一入口）
@@ -195,7 +201,8 @@ langchain/
 │   │   └── long_term.py        # 长期记忆（Qdrant）
 │   │
 │   ├── tools/                  # Agent 工具集（Function Calling）
-│   │   ├── registry.py         # 工具注册中心（限流 + 熔断 + 追踪）
+│   │   ├── registry.py         # 工具注册中心（限流 + 熔断 + Pydantic参数验证）
+│   │   ├── tool_definitions.py # 工具定义（OpenAI格式）
 │   │   ├── calculator.py       # 计算器工具（安全实现）
 │   │   ├── weather.py          # 天气查询工具
 │   │   ├── news_query.py       # 新闻查询工具（Function Calling）
@@ -205,15 +212,15 @@ langchain/
 │   │
 │   ├── services/               # 业务服务层
 │   │   ├── chat.py             # 对话服务（流式 + 工具调用）
-│   │   ├── rag.py              # RAG 服务（检索 + Rerank）
-│   │   ├── rerank.py           # Rerank 服务（智谱 AI）
+│   │   ├── rag.py              # RAG 服务（检索 + Rerank + asyncio.to_thread）
+│   │   ├── rerank.py           # Rerank 服务（智谱 AI + 安全关闭）
 │   │   ├── session.py          # 会话服务
 │   │   └── cache.py            # 缓存服务
 │   │
 │   ├── embeddings/             # 向量嵌入模块
 │   │   ├── zhipu_embedding.py  # 智谱 Embedding
-│   │   ├── qdrant_store.py     # Qdrant 向量存储
-│   │   ├── retriever.py        # 向量检索器
+│   │   ├── qdrant_store.py     # Qdrant 向量存储（retrieve + 异常日志）
+│   │   ├── retriever.py        # 向量检索器（asyncio.to_thread）
 │   │   └── document.py         # 文档加载器
 │   │
 │   ├── llm/                    # LLM 服务模块
@@ -223,7 +230,7 @@ langchain/
 │   ├── db/                     # 数据库模块
 │   │   ├── models/             # ORM 模型
 │   │   ├── repositories/       # 数据仓库
-│   │   ├── database.py         # 数据库连接
+│   │   ├── database.py         # 数据库连接（async+sync引擎均关闭）
 │   │   ├── cache.py            # Redis 缓存
 │   │   └ migrations/           # 数据库迁移
 │   │
@@ -320,14 +327,33 @@ docker-compose exec api python scripts/lol_knowledge_to_qdrant.py \
 ### 健康检查
 
 ```bash
-# 基础健康检查
+# 存活探针（K8s Liveness Probe）
 curl http://localhost:8888/api/v1/health/health
 
-# 详细依赖检查
+# 就绪探针（K8s Readiness Probe）
 curl http://localhost:8888/api/v1/health/ready
+```
+
+### 管理接口（需 Admin Token）
+
+```bash
+# 系统信息
+curl -H "X-Admin-Token: your_token" http://localhost:8888/api/v1/admin/info
 
 # 系统指标
-curl http://localhost:8888/api/v1/health/metrics
+curl -H "X-Admin-Token: your_token" http://localhost:8888/api/v1/admin/metrics
+
+# 熔断器状态
+curl -H "X-Admin-Token: your_token" http://localhost:8888/api/v1/admin/circuit-breakers
+
+# 链路追踪统计
+curl -H "X-Admin-Token: your_token" http://localhost:8888/api/v1/admin/tracing/stats
+
+# 缓存统计
+curl -H "X-Admin-Token: your_token" http://localhost:8888/api/v1/admin/cache/stats
+
+# 工具管理
+curl -H "X-Admin-Token: your_token" http://localhost:8888/api/v1/admin/tools/stats
 ```
 
 ### 对话接口（流式）
@@ -341,9 +367,16 @@ curl -X POST http://localhost:8888/api/v1/chat/message/stream \
 ### RAG 查询
 
 ```bash
+# RAG 查询（公开）
 curl -X POST http://localhost:8888/api/v1/rag/query \
   -H "Content-Type: application/json" \
   -d '{"question": "亚索怎么玩"}'
+
+# 文档入库（需 Admin Token）
+curl -X POST http://localhost:8888/api/v1/rag/ingest/text \
+  -H "X-Admin-Token: your_token" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "文档内容", "source": "test"}'
 ```
 
 ### 记忆管理
@@ -385,6 +418,9 @@ DEFAULT_MODEL=qwen3-max                 # 默认模型
 MAX_TOKENS=4096                         # 最大 Token
 TEMPERATURE=0.7                         # 温度参数
 
+# ===== 安全配置 =====
+ADMIN_TOKEN=your_secure_token_here      # Admin Token（管理接口认证，必须配置）
+
 # ===== Agent 配置 =====
 MAX_ITERATIONS=10                       # ReAct 最大循环次数
 AGENT_TIMEOUT=60                        # 超时时间（秒）
@@ -399,6 +435,7 @@ RERANK_ENABLED=True                     # 启用 Rerank
 RERANK_MODEL=bge-reranker-v2-m3         # Rerank 模型
 RERANK_TOP_K=20                         # Rerank 输入数量
 RERANK_FINAL_K=5                        # Rerank 输出数量
+RAG_ALLOWED_DIRS=/data/documents,/app/documents  # 允许入库的目录白名单
 
 # ===== 日志配置 =====
 LOG_LEVEL=INFO                          # 日志级别（生产用 WARNING）
@@ -408,7 +445,7 @@ DEBUG=false                             # 调试模式
 MYSQL_HOST=mysql
 MYSQL_PORT=3306
 MYSQL_USER=root
-MYSQL_PASSWORD=123456
+MYSQL_PASSWORD=your_password_here       # 生产环境请使用强密码
 MYSQL_DATABASE=agent_db
 
 REDIS_HOST=redis
@@ -424,10 +461,12 @@ QDRANT_COLLECTION=knowledge_base
 | 配置项 | 开发环境 | 生产环境 | 说明 |
 |--------|---------|---------|------|
 | `LOG_LEVEL` | INFO | WARNING | 生产只记录警告和错误 |
-| `DEBUG` | true | false | 关闭调试模式 |
+| `DEBUG` | true | false | 关闭调试模式，隐藏 /docs |
 | `WORKERS` | 1 | 4 | 多 Worker 提高并发 |
 | `MAX_ITERATIONS` | 10 | 5 | 减少循环次数 |
 | `MEMORY_DECAY_RATE` | 0.01 | 0.02 | 加快遗忘速度 |
+| `ADMIN_TOKEN` | - | 必须配置 | 管理接口认证 Token |
+| `RAG_ALLOWED_DIRS` | - | 必须配置 | 允许入库的目录白名单 |
 
 ---
 
@@ -505,14 +544,18 @@ audit.log_security(
 
 | 标准项 | OpenAI | Google | 阿里 | 当前实现 |
 |--------|--------|--------|------|---------|
-| **Function Calling** | ✅ | ✅ | ✅ | ✅ bind_tools |
-| **智能路由** | ✅ | ✅ | ✅ | ✅ 三级策略 |
+| **Function Calling** | ✅ | ✅ | ✅ | ✅ bind_tools + Pydantic参数验证 |
+| **智能路由** | ✅ | ✅ | ✅ | ✅ 规则→缓存→LLM + 动态工具描述 |
 | **ReAct 循环** | ✅ | ✅ | ✅ | ✅ 最大10次 |
-| **记忆管理** | ✅ Memory API | ✅ MemGPT | ✅ | ✅ 遗忘+冲突+整合 |
+| **记忆管理** | ✅ Memory API | ✅ MemGPT | ✅ | ✅ Qdrant存储 + 遗忘+冲突+整合 |
 | **Rerank 重排序** | ❌ | ✅ | ✅ | ✅ 智谱 bge-reranker |
-| **链路追踪** | ✅ | ✅ | ✅ | ✅ OpenTelemetry |
-| **限流熔断** | ✅ | ✅ | ✅ | ✅ Circuit Breaker |
+| **链路追踪** | ✅ | ✅ | ✅ | ✅ 容量上限 + 自动淘汰 |
+| **限流熔断** | ✅ | ✅ | ✅ | ✅ 滑动窗口UUID + asyncio.Lock |
 | **审计日志** | ✅ | ✅ | ✅ | ✅ 操作+安全审计 |
+| **异常体系** | ✅ | ✅ | ✅ | ✅ 统一AgentException + 全局处理器 |
+| **API安全** | ✅ | ✅ | ✅ | ✅ Admin Token + hmac防时序攻击 |
+| **事件循环安全** | ✅ | ✅ | ✅ | ✅ asyncio.to_thread包装所有同步IO |
+| **资源管理** | ✅ | ✅ | ✅ | ✅ 完整启动/关闭生命周期 |
 
 ---
 
@@ -556,3 +599,61 @@ MIT License
 
 - 项目地址: [GitHub](https://github.com/your-project)
 - 问题反馈: [Issues](https://github.com/your-project/issues)
+
+---
+
+## 🔒 生产模式改造记录
+
+以下为框架从开发模式升级到生产模式的所有改造项，共修复 **22 项** 致命/高危/中危问题。
+
+### 架构安全（6项）
+
+| # | 问题 | 修复 | 涉及文件 |
+|---|------|------|----------|
+| 1 | Memory模块混用MySQL和Qdrant | ForgettingManager/ConflictResolver统一使用Qdrant | `memory/forgetting.py`, `memory/conflict.py` |
+| 2 | QdrantAdapter.get_document用scroll模拟精确查询 | 改用retrieve按ID精确获取 | `embeddings/qdrant_store.py` |
+| 3 | 两个同名ToolRegistry类导致导入混淆 | 重命名为tool_definitions.py | `tools/tool_definitions.py` |
+| 4 | 两套异常体系+SessionNotFoundException继承HTTPException | 统一AgentException层级+全局异常处理器 | `core/exceptions.py`, `main.py` |
+| 5 | ingest_directory路径遍历漏洞 | 白名单+realpath检查 | `services/rag.py` |
+| 6 | .env未加入.gitignore，API密钥泄露 | 取消注释.env行 | `.gitignore` |
+
+### 事件循环安全（5项）
+
+| # | 问题 | 修复 | 涉及文件 |
+|---|------|------|----------|
+| 7 | RAG ingest_document/add_documents_batch同步阻塞 | asyncio.to_thread包装 | `services/rag.py` |
+| 8 | RAG ingest_text/delete_document/delete_by_source同步阻塞 | asyncio.to_thread包装 | `services/rag.py` |
+| 9 | RAG _generate_answer同步LLM调用阻塞 | asyncio.to_thread包装 | `services/rag.py` |
+| 10 | Retriever.retrieve同步Qdrant搜索阻塞 | asyncio.to_thread包装 | `embeddings/retriever.py` |
+| 11 | 健康检查readiness_probe同步Qdrant调用 | asyncio.to_thread包装 | `api/v1/health.py` |
+
+### 并发安全（4项）
+
+| # | 问题 | 修复 | 涉及文件 |
+|---|------|------|----------|
+| 12 | CircuitBreaker状态转换非线程安全 | 添加asyncio.Lock + 拆分同步/异步路径 | `core/rate_limit.py` |
+| 13 | DIContainer类变量无锁保护 | 添加threading.Lock | `core/container.py` |
+| 14 | 限流器滑动窗口zadd同秒请求覆盖 | 使用`{timestamp}:{uuid}`作为member | `core/rate_limit.py` |
+| 15 | SmartRouter缓存非线程安全 | OrderedDict + LRU淘汰（单线程事件循环下安全） | `agent/smart_router.py` |
+
+### 内存安全（2项）
+
+| # | 问题 | 修复 | 涉及文件 |
+|---|------|------|----------|
+| 16 | Tracer._completed_spans无限增长 | MAX_COMPLETED_REQUESTS=1000 + 自动淘汰 | `core/tracing.py` |
+| 17 | Metrics延迟列表无限增长 | MAX_LATENCY_SAMPLES=1000 + 裁剪 | `core/metrics.py` |
+
+### 资源管理（3项）
+
+| # | 问题 | 修复 | 涉及文件 |
+|---|------|------|----------|
+| 18 | sync_engine数据库连接从未关闭 | close_db()中添加sync_engine.dispose() | `db/database.py` |
+| 19 | QdrantClient实例关闭时未释放 | lifespan中添加IVectorStore.close() | `main.py` |
+| 20 | shutdown_rerank_service中threading.Lock内await死锁 | 锁内仅原子置None，锁外await close() | `services/rerank.py` |
+
+### API安全（2项）
+
+| # | 问题 | 修复 | 涉及文件 |
+|---|------|------|----------|
+| 21 | Admin Token使用!=比较，存在时序攻击风险 | 改用hmac.compare_digest常量时间比较 | `api/v1/admin.py` |
+| 22 | RAG写入/删除端点无认证保护 | 添加verify_admin_token依赖 | `api/v1/rag.py` |

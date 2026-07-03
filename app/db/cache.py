@@ -4,6 +4,7 @@
 - Redis 缓存
 - 内存缓存（备用）
 """
+import asyncio
 import redis.asyncio as redis
 from typing import Optional
 from app.config import get_settings
@@ -14,38 +15,52 @@ settings = get_settings()
 
 # Redis客户端
 redis_client: Optional[redis.Redis] = None
+_redis_lock = asyncio.Lock()
 
 
 async def get_redis() -> Optional[redis.Redis]:
-    """获取Redis客户端"""
+    """获取Redis客户端（线程安全，带连接池）"""
     global redis_client
     if redis_client is None:
-        try:
-            redis_client = redis.from_url(
-                settings.REDIS_URL,
-                encoding="utf-8",
-                decode_responses=True
-            )
-            await redis_client.ping()
-        except Exception:
-            redis_client = None
+        async with _redis_lock:
+            if redis_client is None:
+                try:
+                    redis_client = redis.from_url(
+                        settings.REDIS_URL,
+                        encoding="utf-8",
+                        decode_responses=True,
+                        max_connections=50,  # 最大连接数
+                        socket_timeout=5,  # socket 超时
+                        socket_connect_timeout=5,  # 连接超时
+                        retry_on_timeout=True,  # 超时重试
+                        health_check_interval=30  # 健康检查间隔
+                    )
+                    await redis_client.ping()
+                except Exception:
+                    redis_client = None
     return redis_client
 
 
 async def init_redis():
     """初始化Redis"""
     global redis_client
-    try:
-        redis_client = redis.from_url(
-            settings.REDIS_URL,
-            encoding="utf-8",
-            decode_responses=True
-        )
-        await redis_client.ping()
-        logger.info("Redis connected")
-    except Exception as e:
-        logger.warning(f"Redis connection failed: {e}. Running without Redis cache.")
-        redis_client = None
+    async with _redis_lock:
+        try:
+            redis_client = redis.from_url(
+                settings.REDIS_URL,
+                encoding="utf-8",
+                decode_responses=True,
+                max_connections=50,
+                socket_timeout=5,
+                socket_connect_timeout=5,
+                retry_on_timeout=True,
+                health_check_interval=30
+            )
+            await redis_client.ping()
+            logger.info("Redis connected (pool: max_connections=50)")
+        except Exception as e:
+            logger.warning(f"Redis connection failed: {e}. Running without Redis cache.")
+            redis_client = None
 
 
 async def close_redis():

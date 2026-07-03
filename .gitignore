@@ -21,7 +21,7 @@ wheels/
 *.egg
 
 # Virtual environments
-# .env
+.env
 # .venv
 # env/
 # venv/
@@ -44,6 +44,11 @@ logs/
 # Database
 *.db
 *.sqlite3
+
+# Alembic (keep versions tracked)
+alembic/*.pyc
+alembic/__pycache__/
+alembic/README
 
 # Backups
 data/backups/*.sql

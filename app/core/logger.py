@@ -22,7 +22,7 @@ import shutil
 import os
 from pathlib import Path
 from logging.handlers import TimedRotatingFileHandler
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 from contextvars import ContextVar
 
@@ -186,7 +186,7 @@ class StructuredFormatter(logging.Formatter):
     
     def format(self, record: logging.LogRecord) -> str:
         log_data = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -261,7 +261,7 @@ class ErrorLogger:
         )
 
 
-class AuditLogger:
+class LogAuditLogger:
     """审计日志"""
     
     def __init__(self, name: str = "audit"):
@@ -458,9 +458,9 @@ def get_error_logger() -> ErrorLogger:
     return ErrorLogger()
 
 
-def get_audit_logger() -> AuditLogger:
+def get_audit_logger() -> LogAuditLogger:
     """获取审计日志"""
-    return AuditLogger()
+    return LogAuditLogger()
 
 
 def get_performance_logger(threshold: float = 1.0) -> PerformanceLogger:

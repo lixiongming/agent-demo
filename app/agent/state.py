@@ -45,8 +45,8 @@ class AgentState(TypedDict):
     final_response: Optional[str]
 
 
-class ChatState(TypedDict):
-    """聊天状态 -（标准 Agent 图模式）
+class ChatState(TypedDict, total=False):
+    """聊天状态 - 标准 Agent 图模式
 
     统一架构：
     - 所有业务逻辑在 Agent 图中处理
@@ -54,6 +54,9 @@ class ChatState(TypedDict):
     - 支持完整的会话生命周期
     - 支持工具调用
     - 支持 ReAct 循环
+
+    注意：total=False 表示所有字段都是可选的，
+    初始化时不需要提供全部字段，LangGraph 会自动处理缺失值。
     """
 
     # ===== 消息相关 =====
@@ -80,7 +83,7 @@ class ChatState(TypedDict):
     rag_sources: Annotated[List[dict], add]
     rag_used: bool
     rag_strategy: Optional[str]
-    rag_score: float
+    rag_score: Optional[float]  # 未检索时为 None
 
     # ===== 工具调用 =====
     tool_decision: Optional[dict]  # {"needs_tool": bool, "tool_calls": list}

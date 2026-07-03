@@ -1,5 +1,6 @@
 """Qdrant 向量存储实现"""
 import asyncio
+import logging
 from typing import List, Optional, Dict, Any
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -7,6 +8,8 @@ from qdrant_client.http.models import Distance, VectorParams, PointStruct
 import numpy as np
 import hashlib
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def _generate_int_id(doc_id: str) -> int:
@@ -570,27 +573,28 @@ class QdrantVectorStoreAdapter:
         )
 
     def get_document(self, doc_id: int) -> Optional[Dict[str, Any]]:
-        """获取单个文档"""
-        # Qdrant 不支持直接按ID获取，需要通过scroll
+        """获取单个文档（按精确 ID 检索）"""
         try:
-            results = self._store.client.scroll(
+            # 使用 retrieve 按 ID 精确获取
+            points = self._store.client.retrieve(
                 collection_name=self._store.collection_name,
-                limit=1,
+                ids=[doc_id],
                 with_payload=True,
                 with_vectors=False,
-            )[0]
+            )
 
-            for point in results:
-                if point.id == doc_id:
-                    payload = point.payload
-                    return {
-                        "id": point.id,
-                        "content": payload.get("content", ""),
-                        "metadata": payload.get("metadata", {}),
-                        "source": payload.get("source", ""),
-                        "doc_type": payload.get("doc_type", ""),
-                    }
-        except Exception:
+            if points:
+                point = points[0]
+                payload = point.payload
+                return {
+                    "id": point.id,
+                    "content": payload.get("content", ""),
+                    "metadata": payload.get("metadata", {}),
+                    "source": payload.get("source", ""),
+                    "doc_type": payload.get("doc_type", ""),
+                }
+        except Exception as e:
+            logger.warning(f"Failed to get document {doc_id}: {e}")
             pass
 
         return None
@@ -603,7 +607,8 @@ class QdrantVectorStoreAdapter:
                 points_selector=models.PointIdsList(points=[doc_id]),
             )
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(f"Failed to delete document {doc_id}: {e}")
             return False
 
     def delete_by_source(self, source: str) -> int:
@@ -624,7 +629,8 @@ class QdrantVectorStoreAdapter:
                 ),
             )
             return 1  # 无法精确返回删除数量
-        except Exception:
+        except Exception as e:
+            logger.error(f"Failed to delete by source '{source}': {e}")
             return 0
 
     def get_stats(self) -> Dict[str, Any]:

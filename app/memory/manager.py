@@ -90,7 +90,8 @@ class MemoryManager:
         self.short_term = ShortTermMemory(session_id)
         self.long_term = LongTermMemory(session_id, db)
         self.forgetting = ForgettingManager(
-            session_id, db,
+            session_id, db=db,
+            qdrant_store=self.long_term.qdrant,
             decay_rate=self.config.get("decay_rate", 0.01),
             max_capacity=self.config.get("max_capacity", 1000)
         )

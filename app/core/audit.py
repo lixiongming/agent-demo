@@ -11,7 +11,7 @@
 - 腾讯云操作审计
 """
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from app.core.logger import get_logger
 import json
 
@@ -62,7 +62,7 @@ class AuditLogger:
             error_message: 错误信息
         """
         audit_record = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "service": self.service_name,
             "action": action,
             "user_id": user_id,
@@ -217,6 +217,62 @@ class AuditLogger:
             status="success" if granted else "denied"
         )
     
+    def log_operation(
+        self,
+        operation: str,
+        user_id: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        resource: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        status: str = "success",
+        error_message: Optional[str] = None
+    ):
+        """记录用户操作审计日志
+
+        Args:
+            operation: 操作类型（如 user_register, user_login, user_logout）
+            user_id: 用户 ID
+            details: 详细信息
+            resource: 资源标识
+            ip_address: IP 地址
+            status: 状态（success, failure）
+            error_message: 错误信息
+        """
+        self.log(
+            action=operation,
+            user_id=str(user_id) if user_id else None,
+            resource=resource,
+            details=details,
+            ip_address=ip_address,
+            status=status,
+            error_message=error_message
+        )
+
+    def log_security(
+        self,
+        event: str,
+        severity: str = "medium",
+        user_id: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        ip_address: Optional[str] = None
+    ):
+        """记录安全事件审计日志
+
+        Args:
+            event: 安全事件类型（如 login_failed, login_locked, token_revoked）
+            severity: 严重程度（low, medium, high, critical）
+            user_id: 用户 ID
+            details: 详细信息
+            ip_address: IP 地址
+        """
+        self.log(
+            action=f"security_{event}",
+            user_id=str(user_id) if user_id else None,
+            details={**(details or {}), "severity": severity},
+            ip_address=ip_address,
+            status="alert"
+        )
+
     def log_sensitive_operation(
         self,
         operation: str,
