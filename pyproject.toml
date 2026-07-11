@@ -1,20 +1,21 @@
 [project]
 name = "agent-demo"
 version = "1.0.0"
-description = "LangChain Agent 服务 - 大厂生产级架构"
+description = "LangGraph + FastAPI Agent Service"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Team", email = "team@example.com"}
+    {name = "Agent Team", email = "team@example.com"}
 ]
-keywords = ["fastapi", "langchain", "agent", "ai"]
+keywords = ["fastapi", "langchain", "agent", "ai", "langgraph"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
 ]
 
 dependencies = [
@@ -53,13 +54,13 @@ dev = [
     "pytest-cov>=4.0.0",
     "black>=23.0.0",
     "isort>=5.12.0",
-    "flake8>=6.0.0",
+    "ruff>=0.1.0",
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
 ]
 
 [project.scripts]
-agent-server = "app.main:main"
+agent-server = "app.main:create_app"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -69,6 +70,9 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["app*"]
 
+# ============================================
+# Black - Code Formatter
+# ============================================
 [tool.black]
 line-length = 100
 target-version = ['py312']
@@ -89,6 +93,9 @@ exclude = '''
 )/
 '''
 
+# ============================================
+# isort - Import Sorter
+# ============================================
 [tool.isort]
 profile = "black"
 line_length = 100
@@ -98,15 +105,46 @@ force_grid_wrap = 0
 use_parentheses = true
 ensure_newline_before_comments = true
 
+# ============================================
+# Ruff - Fast Linter (replaces flake8)
+# ============================================
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [
+    ".git",
+    ".mypy_cache",
+    ".venv",
+    "build",
+    "dist",
+    "migrations",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM"]
+ignore = ["E501", "B008"]
+
+# ============================================
+# MyPy - Type Checker
+# ============================================
 [tool.mypy]
 python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
+exclude = ["migrations/", "tests/"]
 
+# ============================================
+# Pytest
+# ============================================
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 addopts = "-v --cov=app --cov-report=term-missing"
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow tests",
+]

@@ -16,7 +16,7 @@ if docker ps | grep -q "agent-demo-backup"; then
     docker ps | grep "agent-demo-backup"
 else
     echo "❌ 备份容器未运行"
-    echo "请先启动服务: ./docker/start.sh start"
+    echo "请先启动服务: ./scripts/start.sh start"
 fi
 echo ""
 
@@ -67,7 +67,7 @@ echo "是否要手动触发一次备份测试？(y/n)"
 read -r confirm
 if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
     echo "正在手动触发备份..."
-    ./docker/start.sh backup
+    ./scripts/start.sh backup
 
     echo ""
     echo "等待 5 秒后检查备份结果..."
@@ -95,5 +95,5 @@ echo "💡 提示:"
 echo "1. 自动备份时间: 每天凌晨 2:00"
 echo "2. 备份日志位置: logs/backup.log"
 echo "3. 备份文件位置: data/backups/"
-echo "4. 手动备份命令: ./docker/start.sh backup"
+echo "4. 手动备份命令: ./scripts/start.sh backup"
 echo ""

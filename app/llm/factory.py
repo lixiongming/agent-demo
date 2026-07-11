@@ -65,6 +65,7 @@ class LLMFactory:
                     base_url=settings.DASHSCOPE_BASE_URL,
                     request_timeout=60,  # 请求超时 60 秒
                     max_retries=2,  # 最大重试次数
+                    streaming=True,  # 启用流式输出
                     callbacks=[callback_handler],
                     **kwargs
                 )

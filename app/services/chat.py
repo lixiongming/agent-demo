@@ -155,12 +155,15 @@ class ChatService:
 
         try:
             # 使用 astream_events 获取流式输出
+            # 注意：include_types 按 Runnable 类型过滤（如 "chat_model"），不是事件名
+            event_count = 0
             async for event in app.astream_events(
                 initial_state,
                 config=config,
                 version="v2",
-                include_types=["on_chat_model_stream"]
+                include_types=["chat_model"]
             ):
+                event_count += 1
                 kind = event.get("event")
 
                 if kind == "on_chat_model_stream":
@@ -169,6 +172,8 @@ class ChatService:
                         content = chunk.content
                         if isinstance(content, str) and content.strip():
                             yield {"content": content}
+            
+            logger.info(f"Stream completed: {event_count} events processed")
         except Exception as e:
             logger.error(f"Agent graph stream failed: {e}")
             yield {"content": "抱歉，生成响应时出现错误，请稍后重试。"}

@@ -109,11 +109,19 @@ class MemoryIntegrator:
             事实列表
         """
         try:
-            # 构建对话文本
+            # 构建对话文本（兼容 LangChain 消息对象和字典）
             conversation_text = ""
             for msg in messages:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
+                if hasattr(msg, "type"):
+                    # LangChain 消息对象: HumanMessage/AIMessage/SystemMessage/ToolMessage
+                    role = msg.type if msg.type != "human" else "user"
+                    if msg.type == "ai":
+                        role = "assistant"
+                elif isinstance(msg, dict):
+                    role = msg.get("role", "user")
+                else:
+                    role = "user"
+                content = msg.content if hasattr(msg, "content") else msg.get("content", "")
                 conversation_text += f"{role}: {content}\n"
             
             # 构建提示
@@ -484,8 +492,14 @@ class MemoryIntegrator:
         # 1. 提取事实
         facts = await self.extract_facts_from_conversation(messages)
         
-        # 2. 提取实体（从所有消息）
-        all_text = " ".join([m.get("content", "") for m in messages])
+        # 2. 提取实体（从所有消息，兼容 LangChain 消息对象和字典）
+        all_text_parts = []
+        for m in messages:
+            if hasattr(m, "content"):
+                all_text_parts.append(m.content)
+            elif isinstance(m, dict):
+                all_text_parts.append(m.get("content", ""))
+        all_text = " ".join(all_text_parts)
         entities = await self.extract_entities(all_text)
         
         # 3. 建立关系

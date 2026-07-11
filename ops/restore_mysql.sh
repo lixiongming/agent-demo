@@ -25,12 +25,27 @@ error() {
     exit 1
 }
 
-# 加载环境变量
-if [ -f "../.env" ]; then
-    export $(cat ../.env | grep -v '^#' | xargs)
-elif [ -f ".env" ]; then
-    export $(cat .env | grep -v '^#' | xargs)
-fi
+# 加载环境变量（安全方式：逐行读取，跳过注释和空行）
+load_env() {
+    local env_file=""
+    if [ -f "../.env" ]; then
+        env_file="../.env"
+    elif [ -f ".env" ]; then
+        env_file=".env"
+    fi
+
+    if [ -n "$env_file" ]; then
+        while IFS='=' read -r key value; do
+            [[ "$key" =~ ^#.*$ ]] && continue
+            [[ -z "$key" ]] && continue
+            value="${value%\"}"
+            value="${value#\"}"
+            export "$key"="$value"
+        done < "$env_file"
+    fi
+}
+
+load_env
 
 # 数据库配置
 DB_HOST="${MYSQL_HOST:-localhost}"
@@ -134,14 +149,13 @@ if command -v docker &> /dev/null && docker ps | grep -q mysql; then
     info "复制 SQL 文件到容器..."
     docker cp "${TEMP_SQL}" "${CONTAINER_ID}:/tmp/restore.sql"
 
-    # 执行恢复
+    # 执行恢复（使用容器内的文件，避免 stdin 重定向问题）
     info "恢复数据库..."
-    docker exec -i "${CONTAINER_ID}" mysql \
+    docker exec -e MYSQL_PWD="${DB_PASSWORD}" "${CONTAINER_ID}" mysql \
         -h"${DB_HOST}" \
         -P"${DB_PORT}" \
         -u"${DB_USER}" \
-        -p"${DB_PASSWORD}" \
-        "${DB_NAME}" < /dev/stdin < "${TEMP_SQL}"
+        "${DB_NAME}" -e "source /tmp/restore.sql"
 
     # 清理容器中的临时文件
     docker exec "${CONTAINER_ID}" rm -f /tmp/restore.sql
@@ -154,13 +168,12 @@ else
         error "mysql 客户端未安装，请先安装 MySQL 客户端工具"
     fi
 
-    # 执行恢复
+    # 执行恢复（使用 MYSQL_PWD 环境变量避免密码暴露在进程参数中）
     info "恢复数据库..."
-    mysql \
+    MYSQL_PWD="${DB_PASSWORD}" mysql \
         -h"${DB_HOST}" \
         -P"${DB_PORT}" \
         -u"${DB_USER}" \
-        -p"${DB_PASSWORD}" \
         "${DB_NAME}" < "${TEMP_SQL}"
 fi
 

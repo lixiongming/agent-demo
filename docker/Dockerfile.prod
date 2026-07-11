@@ -52,8 +52,6 @@ RUN mkdir -p logs && chown -R appuser:appuser /app
 
 # 复制应用代码
 COPY --chown=appuser:appuser app ./app
-COPY --chown=appuser:appuser main.py .
-COPY --chown=appuser:appuser run_server.py .
 
 # 切换到非 root 用户
 USER appuser

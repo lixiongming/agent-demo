@@ -79,6 +79,9 @@ class ZhipuEmbeddingService:
         Returns:
             向量数组
         """
+        if not text or not text.strip():
+            return np.zeros(self.embedding_dim)
+        
         # 检查缓存
         cache_key = self._get_cache_key(text)
         if self.cache_enabled and cache_key in self._cache:

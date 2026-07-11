@@ -1,12 +1,11 @@
 # ============================================
-# Docker 配置（优化版）
-# Python 版本: 3.12.10
+# Multi-stage Docker Build
+# Python 3.12 | Production-grade
 # ============================================
 
-# 基础镜像 - 使用 slim 版本（最小化）
+# ----- Base -----
 FROM python:3.12-slim AS base
 
-# 设置环境变量
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -14,35 +13,36 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# ============================================
-# 构建阶段 - 安装依赖（单独层，利用缓存）
-# ============================================
+# ----- Builder: install dependencies -----
 FROM base AS builder
 
-# 复制 pip 配置文件（使用国内镜像）
 COPY docker/pip.conf /root/.pip/pip.conf
-
-# 复制依赖文件（单独复制，利用 Docker 缓存）
-# 只有 requirements.txt 变化时才重新安装依赖
 COPY requirements.txt .
 
-# 安装 Python 依赖（使用国内镜像加速）
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ============================================
-# 运行阶段 - 最终镜像
-# ============================================
+# ----- Runner: production image -----
 FROM base AS runner
 
-# 从构建阶段复制依赖
+# Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# 创建必要目录
-RUN mkdir -p logs
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
 
-# 暴露端口
+# Copy application code
+COPY app/ /app/app/
+COPY data/ /app/data/
+
+# Create necessary directories
+RUN mkdir -p logs data && chown -R appuser:appuser /app
+
+USER appuser
+
 EXPOSE 8888
 
-# 开发模式：启动命令（支持热更新）
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8888", "--reload"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8888/health')" || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8888"]

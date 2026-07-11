@@ -1,36 +1,100 @@
-.PHONY: help install run test clean docker-build docker-run
+.PHONY: help install dev run test lint format clean docker-up docker-down migrate init-db seed backup restore deploy
 
+# ============================================
+# Default
+# ============================================
 help:
-	@echo "Available commands:"
-	@echo "  make install      - Install dependencies"
-	@echo "  make run          - Run development server"
-	@echo "  make test         - Run tests"
-	@echo "  make clean        - Clean up"
-	@echo "  make docker-build - Build Docker image"
-	@echo "  make docker-run   - Run Docker container"
-	@echo "  make migrate      - Run database migrations"
-	@echo "  make init-db      - Initialize database"
+	@echo "Usage: make <command>"
+	@echo ""
+	@echo "Development:"
+	@echo "  make install       Install production dependencies"
+	@echo "  make dev           Install dev dependencies"
+	@echo "  make run           Run dev server (hot reload)"
+	@echo ""
+	@echo "Quality:"
+	@echo "  make lint          Run linter (ruff)"
+	@echo "  make format        Format code (black + isort)"
+	@echo "  make typecheck     Run type checker (mypy)"
+	@echo "  make test          Run tests with coverage"
+	@echo "  make test-unit     Run unit tests only"
+	@echo "  make test-integ    Run integration tests only"
+	@echo ""
+	@echo "Docker:"
+	@echo "  make docker-up     Start all services"
+	@echo "  make docker-down   Stop all services"
+	@echo "  make docker-build  Rebuild images"
+	@echo "  make docker-logs   Tail API logs"
+	@echo ""
+	@echo "Database:"
+	@echo "  make migrate       Run Alembic migrations"
+	@echo "  make init-db       Initialize database schema"
+	@echo "  make seed          Seed sample data"
+	@echo ""
+	@echo "Operations:"
+	@echo "  make backup        Backup MySQL database"
+	@echo "  make restore       Restore MySQL database"
+	@echo "  make deploy        Production deploy (incremental)"
+	@echo "  make deploy-full   Production deploy (full rebuild)"
+	@echo "  make rollback      Rollback to previous version"
+	@echo ""
+	@echo "Maintenance:"
+	@echo "  make clean         Remove build artifacts"
+	@echo "  make check         Run all checks (lint + typecheck + test)"
 
+# ============================================
+# Development
+# ============================================
 install:
 	pip install -r requirements.txt
+
+dev:
+	pip install -r requirements.txt -r requirements-dev.txt
 
 run:
 	uvicorn app.main:app --reload --host 0.0.0.0 --port 8888
 
-test:
-	pytest tests/ -v --cov=app
+# ============================================
+# Quality
+# ============================================
+lint:
+	ruff check app/ tests/
 
-clean:
-	find . -type d -name "__pycache__" -exec rm -rf {} +
-	find . -type f -name "*.pyc" -delete
-	rm -rf .pytest_cache .coverage htmlcov
+format:
+	black app/ tests/
+	isort app/ tests/
+
+typecheck:
+	mypy app/
+
+test:
+	pytest tests/ -v --cov=app --cov-report=term-missing
+
+test-unit:
+	pytest tests/unit/ -v
+
+test-integ:
+	pytest tests/integration/ -v
+
+check: lint typecheck test
+
+# ============================================
+# Docker
+# ============================================
+docker-up:
+	./scripts/start.sh start
+
+docker-down:
+	./scripts/start.sh stop
 
 docker-build:
-	docker build -t agent-service:latest -f docker/Dockerfile .
+	./scripts/start.sh rebuild
 
-docker-run:
-	docker-compose -f docker/docker-compose.yml up -d
+docker-logs:
+	./scripts/start.sh logs
 
+# ============================================
+# Database
+# ============================================
 migrate:
 	alembic upgrade head
 
@@ -40,10 +104,28 @@ init-db:
 seed:
 	python scripts/seed_data.py
 
-format:
-	black app/ tests/
-	isort app/ tests/
+# ============================================
+# Operations
+# ============================================
+backup:
+	bash ops/backup_mysql.sh
 
-lint:
-	flake8 app/ tests/
-	mypy app/
+restore:
+	bash ops/restore_mysql.sh
+
+deploy:
+	bash docker/deploy.sh
+
+deploy-full:
+	bash docker/deploy.sh full
+
+rollback:
+	bash docker/deploy.sh rollback
+
+# ============================================
+# Maintenance
+# ============================================
+clean:
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+	rm -rf .pytest_cache .coverage htmlcov .mypy_cache

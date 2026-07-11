@@ -61,7 +61,7 @@ class LLMCallbackHandler(BaseCallbackHandler):
 
         # 计算token
         token_count = 0
-        if hasattr(response, "llm_output"):
+        if hasattr(response, "llm_output") and response.llm_output:
             token_usage = response.llm_output.get("token_usage", {})
             token_count = token_usage.get("total_tokens", 0)
             ctx["token_count"] = token_count
@@ -150,7 +150,7 @@ class CostTracker(BaseCallbackHandler):
     
     def on_llm_end(self, response: Any, **kwargs: Any) -> None:
         """计算成本"""
-        if hasattr(response, "llm_output"):
+        if hasattr(response, "llm_output") and response.llm_output:
             token_usage = response.llm_output.get("token_usage", {})
             input_tokens = token_usage.get("prompt_tokens", 0)
             output_tokens = token_usage.get("completion_tokens", 0)

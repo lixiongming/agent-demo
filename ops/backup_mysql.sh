@@ -25,12 +25,29 @@ error() {
     exit 1
 }
 
-# 加载环境变量
-if [ -f "../.env" ]; then
-    export $(cat ../.env | grep -v '^#' | xargs)
-elif [ -f ".env" ]; then
-    export $(cat .env | grep -v '^#' | xargs)
-fi
+# 加载环境变量（安全方式：逐行读取，跳过注释和空行）
+load_env() {
+    local env_file=""
+    if [ -f "../.env" ]; then
+        env_file="../.env"
+    elif [ -f ".env" ]; then
+        env_file=".env"
+    fi
+
+    if [ -n "$env_file" ]; then
+        while IFS='=' read -r key value; do
+            # 跳过注释和空行
+            [[ "$key" =~ ^#.*$ ]] && continue
+            [[ -z "$key" ]] && continue
+            # 去除首尾引号
+            value="${value%\"}"
+            value="${value#\"}"
+            export "$key"="$value"
+        done < "$env_file"
+    fi
+}
+
+load_env
 
 # 数据库配置
 DB_HOST="${MYSQL_HOST:-localhost}"
@@ -60,12 +77,11 @@ if command -v docker &> /dev/null && docker ps | grep -q mysql; then
 
     info "容器 ID: ${CONTAINER_ID}"
 
-    # 执行备份
-    docker exec "${CONTAINER_ID}" mysqldump \
+    # 执行备份（使用 MYSQL_PWD 环境变量避免密码暴露在进程参数中）
+    MYSQL_PWD="${DB_PASSWORD}" docker exec -e MYSQL_PWD="${DB_PASSWORD}" "${CONTAINER_ID}" mysqldump \
         -h"${DB_HOST}" \
         -P"${DB_PORT}" \
         -u"${DB_USER}" \
-        -p"${DB_PASSWORD}" \
         --single-transaction \
         --routines \
         --triggers \
@@ -80,12 +96,11 @@ else
         error "mysqldump 未安装，请先安装 MySQL 客户端工具"
     fi
 
-    # 执行备份
-    mysqldump \
+    # 执行备份（使用 MYSQL_PWD 环境变量避免密码暴露在进程参数中）
+    MYSQL_PWD="${DB_PASSWORD}" mysqldump \
         -h"${DB_HOST}" \
         -P"${DB_PORT}" \
         -u"${DB_USER}" \
-        -p"${DB_PASSWORD}" \
         --skip-ssl \
         --single-transaction \
         --routines \

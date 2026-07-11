@@ -1,4 +1,6 @@
+# ============================================
 # Python
+# ============================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -20,124 +22,65 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual environments
+# ============================================
+# Environment & Secrets
+# ============================================
 .env
-# .venv
-# env/
-# venv/
-# ENV/
+.env.local
+.env.*.local
+.venv
+venv/
+ENV/
 
-# Docker environment files
-# docker/.env
-
+# ============================================
 # IDE
+# ============================================
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 
+# ============================================
 # Logs
+# ============================================
 logs/
 *.log
 
-# Database
+# ============================================
+# Database & Cache
+# ============================================
 *.db
 *.sqlite3
-
-# Alembic (keep versions tracked)
-alembic/*.pyc
-alembic/__pycache__/
-alembic/README
-
-# Backups
-data/backups/*.sql
-data/backups/*.sql.gz
-!data/backups/.gitkeep
-
-# Docker volumes（忽略数据，保留目录结构）
-data/volumes/mysql/*
-data/volumes/redis/*
-data/volumes/qdrant/*
-!data/volumes/mysql/.gitkeep
-!data/volumes/redis/.gitkeep
-!data/volumes/qdrant/.gitkeep
-
-# Testing
 .pytest_cache/
 .coverage
 htmlcov/
+.mypy_cache/
+.dmypy.json
 
-# Docker
-.docker/
+# ============================================
+# Data (runtime, not source)
+# ============================================
+data/volumes/
+data/backups/*.sql
+data/backups/*.sql.gz
+!data/backups/.gitkeep
+data/*.sql
 
-# Misc
+# ============================================
+# OS
+# ============================================
 .DS_Store
 Thumbs.db
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# ============================================
+# Docker
+# ============================================
+.docker/
 
-# Pyre
-.pyre/
-
-# pytype
-.pytype/
-
-# Celery
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env.local
-.env.*.local
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-.python-version
-
-# pipenv
-Pipfile.lock
-
-# poetry
-poetry.lock
-
-# pdm
-.pdm.toml
-.pdm-python
-.pdm-build-ignore
-
-# PEP 582
-__pypackages__/
-
-# OS generated files
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db*
-
-# Local configuration
+# ============================================
+# Misc
+# ============================================
 *.local
+site/
+.ipynb_checkpoints

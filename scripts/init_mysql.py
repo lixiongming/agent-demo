@@ -1,9 +1,20 @@
-"""初始化MySQL数据库"""
+"""初始化MySQL数据库（首次部署用）
+
+注意：生产环境数据库变更应使用 Alembic 迁移，此脚本仅用于首次建库建表。
+"""
+import re
 import pymysql
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def validate_identifier(name: str) -> str:
+    """校验 SQL 标识符，防止注入"""
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+        raise ValueError(f"非法的数据库标识符: {name}")
+    return name
 
 # MySQL连接配置（不指定数据库）
 config = {
@@ -14,7 +25,7 @@ config = {
     'charset': 'utf8mb4'
 }
 
-database = os.getenv('MYSQL_DATABASE', 'agent_db')
+database = validate_identifier(os.getenv('MYSQL_DATABASE', 'agent_db'))
 
 try:
     # 连接MySQL服务器

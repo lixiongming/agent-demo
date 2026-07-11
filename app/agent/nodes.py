@@ -990,7 +990,7 @@ async def memory_retrieve_node(state: AgentState) -> Dict[str, Any]:
     logger.info("[记忆检索] 开始执行")
     
     session_id = state.get("session_id")
-    query = state.get("current_query", "")
+    query = state.get("current_input", "")
     
     if not session_id:
         logger.warning("[记忆检索] 缺少 session_id")

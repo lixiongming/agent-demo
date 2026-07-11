@@ -161,7 +161,7 @@
 ## 📁 目录结构
 
 ```
-langchain/
+agent-demo/
 ├── app/                        # 应用核心代码
 │   ├── agent/                  # Agent 模块（ReAct + Function Calling）
 │   │   ├── graph.py            # LangGraph 图定义（Chat + ReAct）
@@ -241,18 +241,51 @@ langchain/
 │   └ main.py                   # FastAPI 入口
 │
 ├── docker/                     # Docker 配置
-│   ├── Dockerfile              # 镜像构建
-│   ├── docker-compose.yml      # 开发环境
-│   ├── docker-compose.prod.yml # 生产环境
-│   ├── .env                    # 环境变量
+│   ├── Dockerfile              # 开发镜像构建
+│   ├── Dockerfile.prod         # 生产镜像构建（多 Worker）
+│   ├── Dockerfile.backup       # 定时备份服务镜像
+│   ├── docker-compose.yml      # 开发环境编排
+│   ├── docker-compose.prod.yml # 生产环境编排
+│   ├── deploy.sh               # 生产部署脚本（增量/全量/回滚）
+│   └── pip.conf                # pip 国内镜像源
+│
+├── ops/                        # 运维脚本
+│   ├── backup_mysql.sh         # MySQL 数据库备份
+│   ├── restore_mysql.sh        # MySQL 数据库恢复
+│   ├── start_cron.sh           # 启动 cron 定时任务
+│   └── verify_backup.sh        # 备份验证脚本
 │
 ├── scripts/                    # 工具脚本
+│   ├── start.sh                # Docker 一键启动脚本
+│   ├── init_db.py              # 数据库初始化
+│   ├── init_mysql.py           # MySQL 建库建表（首次部署用）
+│   ├── seed_data.py            # 测试数据填充
+│   ├── lol_knowledge_to_qdrant.py  # 知识库导入 Qdrant
+│   └── diagnose/               # 诊断脚本
+│       ├── diagnose_weather_api.py  # 天气 API 诊断
+│       └── view_mysql.py           # MySQL 数据查看
+│
 ├── tests/                      # 测试代码
-├── logs/                       # 日志目录
+│   ├── unit/                   # 单元测试
+│   └── integration/            # 集成测试
+│
+├── data/                       # 数据目录（.gitignore）
+│   ├── backups/                # 数据库备份文件
+│   └── volumes/                # Docker 持久化卷
+│
 ├── docs/                       # 文档目录
-├── requirements.txt            # Python 依赖
-├── Makefile                    # Make 命令
-└ README.md                     # 项目文档
+├── logs/                       # 日志目录（.gitignore）
+│
+├── .github/                    # GitHub Actions CI
+│   └── workflows/ci.yml        # CI 流水线（lint + test + build）
+│
+├── .env.example                # 环境变量模板
+├── .gitignore                  # Git 忽略规则
+├── Makefile                    # Make 命令（开发/测试/部署/运维）
+├── pyproject.toml              # Python 项目配置
+├── requirements.txt            # 生产依赖
+├── requirements-dev.txt        # 开发依赖
+└── README.md                   # 项目文档
 ```
 
 ---
@@ -267,14 +300,14 @@ langchain/
 
 # 克隆项目
 git clone <project_url>
-cd langchain
+cd agent-demo
 ```
 
 ### 2. 配置环境变量
 
 ```bash
 # 复制环境变量模板
-cp docker/.env.example docker/.env
+cp .env.example .env
 
 # 编辑 .env 文件
 # 必须配置：DASHSCOPE_API_KEY（智谱 API Key）
@@ -283,7 +316,13 @@ cp docker/.env.example docker/.env
 ### 3. Docker 启动
 
 ```bash
-# 开发模式（热更新）
+# 方式一：使用一键脚本（推荐）
+./scripts/start.sh start
+
+# 方式二：使用 Makefile
+make docker-up
+
+# 方式三：手动 docker-compose
 cd docker
 docker-compose up -d --build
 
@@ -294,13 +333,20 @@ docker-compose -f docker-compose.prod.yml up -d --build
 ### 4. 数据库迁移
 
 ```bash
-# 添加记忆管理字段
-docker-compose exec api python -m app.db.migrations.add_memory_fields
+# 使用 Alembic 迁移
+make migrate
+
+# 或手动初始化
+python scripts/init_db.py
 ```
 
 ### 5. 导入知识库
 
 ```bash
+# 方式一：使用一键脚本
+./scripts/start.sh import
+
+# 方式二：手动执行
 docker-compose exec api python scripts/lol_knowledge_to_qdrant.py \
     "/app/data/lol_knowledge_base.md" \
     --host qdrant \
@@ -556,6 +602,106 @@ audit.log_security(
 | **API安全** | ✅ | ✅ | ✅ | ✅ Admin Token + hmac防时序攻击 |
 | **事件循环安全** | ✅ | ✅ | ✅ | ✅ asyncio.to_thread包装所有同步IO |
 | **资源管理** | ✅ | ✅ | ✅ | ✅ 完整启动/关闭生命周期 |
+
+---
+
+## 🛠️ 脚本使用说明
+
+### Makefile 命令（推荐）
+
+```bash
+make help              # 查看所有可用命令
+```
+
+| 分类 | 命令 | 说明 |
+|------|------|------|
+| **开发** | `make install` | 安装生产依赖 |
+| | `make dev` | 安装开发依赖 |
+| | `make run` | 启动开发服务器（热更新） |
+| **质量** | `make lint` | Ruff 代码检查 |
+| | `make format` | Black + isort 格式化 |
+| | `make typecheck` | MyPy 类型检查 |
+| | `make test` | 运行测试（含覆盖率） |
+| | `make check` | 运行所有检查 |
+| **Docker** | `make docker-up` | 启动所有服务 |
+| | `make docker-down` | 停止所有服务 |
+| | `make docker-build` | 重建镜像 |
+| | `make docker-logs` | 查看 API 日志 |
+| **数据库** | `make migrate` | Alembic 迁移 |
+| | `make init-db` | 初始化数据库 |
+| | `make seed` | 填充测试数据 |
+| **运维** | `make backup` | 备份 MySQL |
+| | `make restore` | 恢复 MySQL |
+| | `make deploy` | 生产部署（增量） |
+| | `make deploy-full` | 生产部署（全量重建） |
+| | `make rollback` | 回滚到上一版本 |
+
+### 一键启动脚本
+
+```bash
+./scripts/start.sh start     # 启动所有服务
+./scripts/start.sh stop      # 停止所有服务
+./scripts/start.sh logs      # 查看 API 日志
+./scripts/start.sh rebuild   # 重建服务（无缓存）
+./scripts/start.sh import    # 导入知识库到 Qdrant
+./scripts/start.sh backup    # 备份 MySQL 数据库
+./scripts/start.sh restore   # 恢复 MySQL 数据库
+```
+
+### 运维脚本（ops/）
+
+```bash
+# 备份数据库
+bash ops/backup_mysql.sh
+
+# 恢复数据库（交互式选择备份文件）
+bash ops/restore_mysql.sh
+
+# 恢复数据库（指定备份文件）
+bash ops/restore_mysql.sh data/backups/agent_db_20260710_120000.sql.gz
+
+# 验证备份功能
+bash ops/verify_backup.sh
+```
+
+### 生产部署（docker/deploy.sh）
+
+```bash
+# 增量部署（只重建有变化的层）
+bash docker/deploy.sh
+
+# 全量部署（零缓存重建）
+bash docker/deploy.sh full
+
+# 回滚到上一版本
+bash docker/deploy.sh rollback
+```
+
+### Python 工具脚本（scripts/）
+
+```bash
+# 初始化数据库（ORM 建表）
+python scripts/init_db.py
+
+# 首次部署建库建表（直接 DDL，生产环境建议用 Alembic）
+python scripts/init_mysql.py
+
+# 填充测试数据
+python scripts/seed_data.py
+
+# 知识库导入 Qdrant
+python scripts/lol_knowledge_to_qdrant.py data/lol_knowledge_base.md --host localhost --port 6333
+```
+
+### 诊断脚本（scripts/diagnose/）
+
+```bash
+# 诊断天气 API 连接问题
+python scripts/diagnose/diagnose_weather_api.py
+
+# 查看 MySQL 数据
+python scripts/diagnose/view_mysql.py
+```
 
 ---
 

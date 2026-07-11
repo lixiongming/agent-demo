@@ -1,8 +1,12 @@
-# Git
+# ============================================
+# Version Control
+# ============================================
 .git
 .gitignore
 
-# Python
+# ============================================
+# Python (build artifacts)
+# ============================================
 __pycache__
 *.py[cod]
 *$py.class
@@ -14,14 +18,11 @@ __pycache__
 .pytest_cache
 .coverage
 htmlcov
+.mypy_cache
 
-# IDE
-.idea
-.vscode
-*.swp
-*.swo
-
-# 环境文件
+# ============================================
+# Environment & Secrets
+# ============================================
 .env
 .env.local
 .env.*.local
@@ -29,42 +30,67 @@ htmlcov
 venv
 ENV
 
-# 日志
+# ============================================
+# IDE
+# ============================================
+.idea
+.vscode
+*.swp
+*.swo
+
+# ============================================
+# Logs
+# ============================================
 logs/
 *.log
 
-# 测试
+# ============================================
+# Tests (not needed in production image)
+# ============================================
 tests/
 test_*.py
 *_test.py
 
-# 文档
+# ============================================
+# Docs
+# ============================================
 docs/
 *.md
 README*
 
-# 临时文件
-*.tmp
-*.temp
-.cache
-
-# Docker（保留 pip.conf）
+# ============================================
+# Docker (keep pip.conf)
+# ============================================
 docker/*
 !docker/pip.conf
 
-# 大文件（模型已挂载）
-# models/  # 模型目录通过 volumes 挂载
-
-# 数据文件
-data/*.csv
-data/*.json
+# ============================================
+# Data (mounted as volumes)
+# ============================================
 data/volumes
-data/volumes/**
 data/backups/*.sql
 data/backups/*.sql.gz
 !data/backups/.gitkeep
+data/*.sql
 
-# 其他
+# ============================================
+# Dev tools & CI
+# ============================================
+.github
+Makefile
+scripts/
+ops/
+pyproject.toml
+requirements-dev.txt
+
+# ============================================
+# Misc
+# ============================================
 .DS_Store
 Thumbs.db
 *.bak
+*.tmp
+*.temp
+.cache
+static/
+.trae/
