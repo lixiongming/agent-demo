@@ -44,8 +44,13 @@ FROM base AS runner
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
+# 安装运行时依赖（curl 用于 healthcheck）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # 创建非 root 用户（安全最佳实践）
-RUN useradd --create-home --shell /bin/bash appuser
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
 
 # 创建必要目录
 RUN mkdir -p logs && chown -R appuser:appuser /app
@@ -61,7 +66,7 @@ EXPOSE 8888
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8888/api/v1/health || exit 1
+    CMD curl -f http://localhost:8888/api/v1/health/health || exit 1
 
 # 生产环境启动命令（多 worker，无热更新）
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8888", "--workers", "4"]

@@ -68,7 +68,7 @@ class RateLimiter:
     async def _get_redis(self):
         """获取 Redis 连接"""
         if self.redis is None:
-            from app.db.cache import get_redis
+            from app.db.redis_client import get_redis
             redis_client = await get_redis()
             if redis_client is None:
                 self.redis = self._REDIS_SENTINEL

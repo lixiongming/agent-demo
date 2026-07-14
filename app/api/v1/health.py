@@ -50,7 +50,7 @@ async def readiness_check():
 
     # 检查 Redis
     try:
-        from app.db.cache import get_redis
+        from app.db.redis_client import get_redis
         redis = await get_redis()
         await redis.ping()
         checks["redis"] = "healthy"

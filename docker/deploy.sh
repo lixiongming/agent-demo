@@ -20,7 +20,7 @@ error() { echo "${RED}[ERROR]${NC} $1"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+COMPOSE_FILE="$SCRIPT_DIR/docker compose.yml"
 
 # 拉取最新代码
 git_pull() {
@@ -36,7 +36,7 @@ health_check() {
     local waited=0
 
     while [ $waited -lt $max_wait ]; do
-        if curl -sf http://localhost:8888/api/v1/health/health > /dev/null 2>&1; then
+        if curl -sf http://localhost:8888/api/v1/health/ready > /dev/null 2>&1; then
             info "服务健康检查通过"
             return 0
         fi
@@ -45,7 +45,7 @@ health_check() {
         echo -n "."
     done
 
-    error "服务启动超时（${max_wait}s），请检查日志: docker-compose logs api"
+    error "服务启动超时（${max_wait}s），请检查日志: docker compose logs api"
 }
 
 # 正常部署（增量）
@@ -57,15 +57,15 @@ deploy() {
 
     # 构建并启动（只重建有变化的层）
     info "构建镜像..."
-    docker-compose build api
+    docker compose build api
 
     info "重启服务..."
-    docker-compose up -d --no-deps api
+    docker compose up -d --no-deps api
 
     health_check
 
     info "=== 部署完成 ==="
-    docker-compose ps
+    docker compose ps
 }
 
 # 全量部署（零缓存）
@@ -77,20 +77,20 @@ deploy_full() {
 
     # 停止旧服务
     info "停止旧服务..."
-    docker-compose down
+    docker compose down
 
     # 无缓存构建
     info "清除缓存并重新构建..."
-    docker-compose build --no-cache api
+    docker compose build --no-cache api
 
     # 启动所有服务
     info "启动所有服务..."
-    docker-compose up -d
+    docker compose up -d
 
     health_check
 
     info "=== 全量部署完成 ==="
-    docker-compose ps
+    docker compose ps
 }
 
 # 回滚
@@ -120,8 +120,8 @@ rollback() {
 
     # 重建并启动
     info "重建旧版本镜像..."
-    docker-compose build --no-cache api
-    docker-compose up -d --no-deps api
+    docker compose build --no-cache api
+    docker compose up -d --no-deps api
 
     health_check
 

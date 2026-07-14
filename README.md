@@ -322,12 +322,12 @@ cp .env.example .env
 # 方式二：使用 Makefile
 make docker-up
 
-# 方式三：手动 docker-compose
+# 方式三：手动 docker compose
 cd docker
-docker-compose up -d --build
+docker compose up -d --build
 
 # 生产模式（多 Worker）
-docker-compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 ### 4. 数据库迁移
@@ -347,10 +347,94 @@ python scripts/init_db.py
 ./scripts/start.sh import
 
 # 方式二：手动执行
-docker-compose exec api python scripts/lol_knowledge_to_qdrant.py \
+docker compose exec api python scripts/lol_knowledge_to_qdrant.py \
     "/app/data/lol_knowledge_base.md" \
     --host qdrant \
     --port 6333
+```
+
+---
+
+## 🐳 Docker 生产运维指令
+
+> 以下指令均在项目根目录执行，`dc` 为 `docker compose` 的简写习惯。
+
+### 开发环境
+
+```bash
+# ===== 启动/停止 =====
+cd docker && docker compose up -d --build          # 构建并启动（后台）
+docker compose down                                # 停止并移除容器
+docker compose restart api                         # 重启单个服务
+
+# ===== 状态/日志 =====
+docker compose ps                                  # 查看所有服务状态
+docker compose logs -f api                         # 实时查看 API 日志
+docker compose logs --tail=100 api                 # 查看最近 100 行日志
+
+# ===== 重建 =====
+docker compose build api                           # 增量构建 API 镜像
+docker compose build --no-cache api                # 零缓存全量重建
+docker compose up -d --no-deps --build api         # 仅重建并重启 API（不影响依赖）
+
+# ===== 调试 =====
+docker compose exec api bash                       # 进入 API 容器
+docker compose exec api python -c "..."            # 容器内执行 Python
+docker compose exec mysql mysql -uroot -p123456 agent_db  # 连接 MySQL
+
+# ===== 健康检查 =====
+curl -f http://localhost:8888/api/v1/health/health  # 存活探针
+curl -f http://localhost:8888/api/v1/health/ready   # 就绪探针
+```
+
+### 生产环境
+
+```bash
+# ===== 启动/停止 =====
+cd docker && docker compose -f docker-compose.prod.yml up -d --build   # 生产构建并启动
+docker compose -f docker-compose.prod.yml down                          # 停止生产环境
+docker compose -f docker-compose.prod.yml restart api                   # 重启 API
+
+# ===== 滚动更新（零停机） =====
+docker compose -f docker-compose.prod.yml build api                    # 构建新镜像
+docker compose -f docker-compose.prod.yml up -d --no-deps api          # 仅更新 API 容器
+
+# ===== 全量重建 =====
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml build --no-cache
+docker compose -f docker-compose.prod.yml up -d
+
+# ===== 状态/日志 =====
+docker compose -f docker-compose.prod.yml ps                           # 查看服务状态
+docker compose -f docker-compose.prod.yml logs -f --tail=50 api        # 实时日志
+docker compose -f docker-compose.prod.yml top                          # 查看容器资源占用
+
+# ===== 数据库运维 =====
+docker compose -f docker-compose.prod.yml exec mysql \
+    mysqldump -uroot -p${MYSQL_ROOT_PASSWORD} agent_db | gzip > backup.sql.gz  # 手动备份
+docker compose -f docker-compose.prod.yml exec redis redis-cli info memory     # Redis 内存信息
+docker compose -f docker-compose.prod.yml exec redis redis-cli dbsize          # Redis key 数量
+
+# ===== 资源监控 =====
+docker stats --no-stream                            # 所有容器资源使用快照
+docker system df                                    # 磁盘占用（镜像/容器/卷）
+
+# ===== 清理 =====
+docker system prune -f                              # 清理无用镜像/容器/网络
+docker volume prune -f                              # 清理无用卷（注意：勿删数据卷）
+```
+
+### 部署脚本
+
+```bash
+# 增量部署（只重建有变化的层）
+bash docker/deploy.sh
+
+# 全量部署（零缓存重建）
+bash docker/deploy.sh full
+
+# 回滚到上一版本
+bash docker/deploy.sh rollback
 ```
 
 ---
@@ -709,10 +793,10 @@ python scripts/diagnose/view_mysql.py
 
 ```bash
 # 运行测试
-docker-compose exec api pytest tests/
+docker compose exec api pytest tests/
 
 # 测试覆盖率
-docker-compose exec api pytest --cov=app tests/
+docker compose exec api pytest --cov=app tests/
 ```
 
 ---

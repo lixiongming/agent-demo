@@ -31,7 +31,7 @@ check_docker() {
         error "Docker 未安装，请先安装 Docker"
     fi
     
-    if ! command -v docker-compose &> /dev/null; then
+    if ! command -v docker compose &> /dev/null; then
         error "Docker Compose 未安装，请先安装 Docker Compose"
     fi
     
@@ -61,18 +61,18 @@ start() {
     
     # 构建镜像
     info "构建镜像..."
-    docker-compose build
+    docker compose build
     
     # 启动服务
     info "启动服务..."
-    docker-compose up -d
+    docker compose up -d
     
     # 等待服务启动
     info "等待服务启动..."
     sleep 10
     
     # 检查服务状态
-    docker-compose ps
+    docker compose ps
     
     info "服务启动完成!"
     echo ""
@@ -84,31 +84,31 @@ start() {
     echo "  Redis:    localhost:6379"
     echo "============================================"
     echo ""
-    echo "查看日志: docker-compose logs -f api"
-    echo "停止服务: docker-compose down"
+    echo "查看日志: docker compose logs -f api"
+    echo "停止服务: docker compose down"
 }
 
 # 停止服务
 stop() {
     info "停止 Docker 服务..."
     cd docker
-    docker-compose down
+    docker compose down
     info "服务已停止"
 }
 
 # 查看日志
 logs() {
     cd docker
-    docker-compose logs -f api
+    docker compose logs -f api
 }
 
 # 重建服务
 rebuild() {
     info "重建 Docker 服务..."
     cd docker
-    docker-compose down
-    docker-compose build --no-cache
-    docker-compose up -d
+    docker compose down
+    docker compose build --no-cache
+    docker compose up -d
     info "重建完成"
 }
 
@@ -120,7 +120,7 @@ import_knowledge() {
     sleep 5
     
     # 执行导入脚本
-    docker-compose exec api python scripts/lol_knowledge_to_qdrant.py \
+    docker compose exec api python scripts/lol_knowledge_to_qdrant.py \
         "/app/data/lol_knowledge_base.md" \
         --host qdrant \
         --port 6333

@@ -19,7 +19,7 @@
 
 import hashlib
 from typing import Optional, Dict, Any, List
-from app.db.cache import get_redis, RedisCache
+from app.db.redis_client import get_redis, RedisCache
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)

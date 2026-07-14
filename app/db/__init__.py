@@ -5,7 +5,7 @@ from .database import (
     get_async_session, get_sync_session,
     init_db, close_db
 )
-from .cache import (
+from .redis_client import (
     get_redis, init_redis, close_redis,
     RedisCache
 )

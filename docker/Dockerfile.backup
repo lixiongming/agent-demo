@@ -1,11 +1,12 @@
 # ============================================
-# MySQL 定时备份服务镜像
+# MySQL 定时备份服务镜像（生产级）
 # ============================================
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cron \
     mysql-client \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -22,5 +23,14 @@ RUN chmod +x /app/ops/backup_mysql.sh \
 RUN echo "0 2 * * * /app/ops/backup_mysql.sh >> /app/logs/backup.log 2>&1" | crontab -
 
 RUN mkdir -p /app/logs /app/data/backups
+
+# 创建非 root 用户
+RUN groupadd -r backupuser && useradd -r -g backupuser -d /app -s /sbin/nologin backupuser \
+    && chown -R backupuser:backupuser /app
+
+USER backupuser
+
+HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
+    CMD pgrep cron > /dev/null || exit 1
 
 CMD ["/app/ops/start_cron.sh"]

@@ -104,7 +104,7 @@ class UserInfoResponse(BaseModel):
 async def _check_register_ip_limit(ip: str):
     """检查同一 IP 注册频率（防批量注册）"""
     try:
-        from app.db.cache import get_redis
+        from app.db.redis_client import get_redis
         redis = await get_redis()
         key = f"register_ip:{ip}"
         count = await redis.incr(key)
@@ -121,7 +121,7 @@ async def _check_register_ip_limit(ip: str):
 async def _check_ip_login_limit(ip: str):
     """检查同一 IP 登录频率（防分布式撞库）"""
     try:
-        from app.db.cache import get_redis
+        from app.db.redis_client import get_redis
         redis = await get_redis()
         key = f"login_ip:{ip}"
         count = await redis.incr(key)
@@ -151,7 +151,7 @@ def _get_lockout_duration(attempts: int) -> int | None:
 async def _get_login_attempts(username: str) -> int:
     """获取登录失败次数"""
     try:
-        from app.db.cache import get_redis
+        from app.db.redis_client import get_redis
         redis = await get_redis()
         count = await redis.get(f"login_fail:{username}")
         return int(count) if count else 0
@@ -162,7 +162,7 @@ async def _get_login_attempts(username: str) -> int:
 async def _record_login_failure(username: str):
     """记录登录失败（渐进式TTL）"""
     try:
-        from app.db.cache import get_redis
+        from app.db.redis_client import get_redis
         redis = await get_redis()
         key = f"login_fail:{username}"
         count = await redis.incr(key)
@@ -183,7 +183,7 @@ async def _record_login_failure(username: str):
 async def _clear_login_failure(username: str):
     """清除登录失败计数"""
     try:
-        from app.db.cache import get_redis
+        from app.db.redis_client import get_redis
         redis = await get_redis()
         await redis.delete(f"login_fail:{username}")
     except Exception:

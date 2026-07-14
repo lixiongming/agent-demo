@@ -28,12 +28,17 @@ FROM base AS runner
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
+# Install runtime dependencies (curl for healthcheck)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
 
 # Copy application code
-COPY app/ /app/app/
-COPY data/ /app/data/
+COPY --chown=appuser:appuser app/ /app/app/
+COPY --chown=appuser:appuser data/ /app/data/
 
 # Create necessary directories
 RUN mkdir -p logs data && chown -R appuser:appuser /app
@@ -43,6 +48,6 @@ USER appuser
 EXPOSE 8888
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8888/health')" || exit 1
+    CMD curl -f http://localhost:8888/api/v1/health/health || exit 1
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8888"]

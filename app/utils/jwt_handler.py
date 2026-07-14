@@ -160,7 +160,7 @@ async def revoke_token(token: str, ttl_seconds: Optional[int] = None) -> bool:
         ttl_seconds: 黑名单保留时间（默认取 token 剩余有效期）
     """
     try:
-        from app.db.cache import get_redis
+        from app.db.redis_client import get_redis
         redis_client = await get_redis()
 
         # 解码获取过期时间（不验证过期，允许已过期 token 加入黑名单）
@@ -190,7 +190,7 @@ async def revoke_token(token: str, ttl_seconds: Optional[int] = None) -> bool:
 async def is_token_revoked(token: str) -> bool:
     """检查 Token 是否已被撤销"""
     try:
-        from app.db.cache import get_redis
+        from app.db.redis_client import get_redis
         redis_client = await get_redis()
         return await redis_client.exists(f"token_blacklist:{token}")
     except Exception:
