@@ -149,11 +149,12 @@ def create_chat_graph():
     workflow.add_edge("chat", "save_message")
     workflow.add_edge("save_message", "memory_integrate")
     workflow.add_edge("memory_integrate", END)
-    
+
     # ===== 编译 =====
-    checkpointer = get_checkpointer()
-    app = workflow.compile(checkpointer=checkpointer)
-    
+    # 不使用 checkpointer：历史消息由 load_history_node 从 DB 加载，
+    # checkpointer 的 add_messages 追加语义会导致上一轮消息重复
+    app = workflow.compile()
+
     logger.info("Chat graph compiled (大厂标准: Function Calling + ToolMessage + Memory)")
     return app
 
@@ -207,9 +208,10 @@ def create_react_graph():
     workflow.add_edge("save_message", END)
     
     # ===== 编译 =====
-    checkpointer = get_checkpointer()
-    app = workflow.compile(checkpointer=checkpointer)
-    
+    # 不使用 checkpointer：历史消息由 load_history_node 从 DB 加载，
+    # checkpointer 的 add_messages 追加语义会导致上一轮消息重复
+    app = workflow.compile()
+
     logger.info("ReAct graph compiled (大厂标准: 多轮工具调用)")
     return app
 

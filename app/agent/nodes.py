@@ -145,7 +145,7 @@ async def rag_retrieve_node(state: ChatState) -> Dict[str, Any]:
         if not needs_retrieval:
             logger.info("RAG retrieval skipped")
             span.set_attribute("result", "skipped")
-            return state
+            return {"rag_used": False}
         
         current_input = state.get("current_input", "")
         
@@ -887,7 +887,7 @@ async def memory_integrate_node(state: AgentState) -> Dict[str, Any]:
     
     if not session_id or not messages:
         logger.warning("[记忆整合] 缺少必要参数")
-        return state
+        return {"memory_integrated": False}
     
     try:
         from app.memory import MemoryIntegrator
@@ -921,7 +921,7 @@ async def memory_integrate_node(state: AgentState) -> Dict[str, Any]:
     
     except Exception as e:
         logger.error(f"[记忆整合] 失败: {e}")
-        return state
+        return {"memory_integrated": False}
 
 
 async def memory_forgetting_node(state: AgentState) -> Dict[str, Any]:
@@ -942,7 +942,7 @@ async def memory_forgetting_node(state: AgentState) -> Dict[str, Any]:
     
     if not session_id:
         logger.warning("[遗忘周期] 缺少 session_id")
-        return state
+        return {"forgetting_cycle_run": False}
     
     try:
         from app.memory import ForgettingManager
@@ -972,7 +972,7 @@ async def memory_forgetting_node(state: AgentState) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"[遗忘周期] 失败: {e}")
-        return state
+        return {"forgetting_cycle_run": False}
 
 
 async def memory_retrieve_node(state: AgentState) -> Dict[str, Any]:
@@ -994,7 +994,7 @@ async def memory_retrieve_node(state: AgentState) -> Dict[str, Any]:
     
     if not session_id:
         logger.warning("[记忆检索] 缺少 session_id")
-        return state
+        return {"memory_retrieved": False}
     
     try:
         from app.memory import MemoryManager
@@ -1024,4 +1024,4 @@ async def memory_retrieve_node(state: AgentState) -> Dict[str, Any]:
     
     except Exception as e:
         logger.error(f"[记忆检索] 失败: {e}")
-        return state
+        return {"memory_retrieved": False}

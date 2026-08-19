@@ -85,7 +85,7 @@ class ChatService:
             "assistant_message_saved": False
         }
         
-        # 调用 Agent 图（需要传递 config 参数给 Checkpointer）
+        # 调用 Agent 图
         app = _get_chat_app()
         config = {"configurable": {"thread_id": session_id}}
         result = await app.ainvoke(initial_state, config=config)
@@ -155,39 +155,40 @@ class ChatService:
 
         try:
             # 使用 astream_events 获取流式输出
-            # 注意：include_types 按 Runnable 类型过滤（如 "chat_model"），不是事件名
+            # 不使用 include_types 过滤，以便同时捕获 RAG 状态信息
             event_count = 0
             async for event in app.astream_events(
                 initial_state,
                 config=config,
                 version="v2",
-                include_types=["chat_model"]
             ):
                 event_count += 1
                 kind = event.get("event")
 
+                # 捕获 LLM 流式输出
                 if kind == "on_chat_model_stream":
                     chunk = event.get("data", {}).get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
                         content = chunk.content
                         if isinstance(content, str) and content.strip():
                             yield {"content": content}
-            
+
+                # 从节点输出中捕获 RAG 信息
+                if kind == "on_chain_end":
+                    output = event.get("data", {}).get("output", {})
+                    if isinstance(output, dict):
+                        if "rag_used" in output:
+                            rag_used = output.get("rag_used", False)
+                        if "rag_strategy" in output:
+                            rag_strategy = output.get("rag_strategy")
+                        if "rag_score" in output:
+                            rag_score = output.get("rag_score", 0.0)
+
             logger.info(f"Stream completed: {event_count} events processed")
         except Exception as e:
             logger.error(f"Agent graph stream failed: {e}")
             yield {"content": "抱歉，生成响应时出现错误，请稍后重试。"}
             return
-
-        # 从图状态中获取 RAG 信息
-        try:
-            state = await app.aget_state(config)
-            if state and state.values:
-                rag_used = state.values.get("rag_used", False)
-                rag_strategy = state.values.get("rag_strategy")
-                rag_score = state.values.get("rag_score", 0.0)
-        except Exception as e:
-            logger.warning(f"Failed to get final state: {e}")
 
         # 返回最终状态
         yield {
